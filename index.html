@@ -34,15 +34,6 @@
         }
         .animate-fade-in { animation: fadeIn 0.2s ease-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        
-        .dragging { opacity: 0.5; border: 2px dashed #2563eb !important; background: #eff6ff !important; }
-        .drag-over { border-top: 4px dashed #2563eb !important; }
-        .touch-active { transform: scale(1.05); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); z-index: 50; }
-        
-        .selectable-domain {
-            user-select: all !important;
-            -webkit-user-select: all !important;
-        }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-800">
@@ -51,7 +42,7 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot, query, getDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const firebaseConfig = {
@@ -70,8 +61,7 @@
             const appId = "gyoumukanri-main-v1"; 
 
             window.firebaseApp = { 
-                auth, db, appId, collection, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot, query, getDoc, writeBatch,
-                GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged
+                auth, db, appId, collection, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot, query, getDoc, writeBatch, signInAnonymously, onAuthStateChanged 
             };
             
             window.dispatchEvent(new Event('firebase-ready'));
@@ -82,7 +72,10 @@
     </script>
 
     <script type="text/babel">
-        const { useState, useEffect, useMemo, useRef } = React;
+        const { useState, useEffect, useMemo } = React;
+
+        // パスコード固定
+        const MASTER_PASSCODE = "1870";
 
         const App = () => {
             const [ready, setReady] = useState(false);
@@ -90,9 +83,11 @@
             const [tasks, setTasks] = useState([]);
             const [config, setConfig] = useState({ roles: ['共通'], roleMajors: { '共通': [] } });
             const [loading, setLoading] = useState(true);
+            const [isAuthorized, setIsAuthorized] = useState(false);
+            const [authInput, setAuthInput] = useState('');
             const [errorMessage, setErrorMessage] = useState(null);
-            const [copyStatus, setCopyStatus] = useState('コピー');
             
+            // UI States
             const [isModalOpen, setIsModalOpen] = useState(false);
             const [isSettingsOpen, setIsSettingsOpen] = useState(false);
             const [selectedRoleForSettings, setSelectedRoleForSettings] = useState('');
@@ -101,10 +96,7 @@
             const [roleFilter, setRoleFilter] = useState('すべて');
             const [searchTerm, setSearchTerm] = useState('');
 
-            const [draggedIndex, setDraggedIndex] = useState(null);
-            const [dragOverIndex, setDragOverIndex] = useState(null);
-            const longPressTimer = useRef(null);
-
+            // 追加・編集用入力管理
             const [newRoleInput, setNewRoleInput] = useState('');
             const [newMajorInput, setNewMajorInput] = useState('');
             const [editingRoleIndex, setEditingRoleIndex] = useState(null);
@@ -124,11 +116,7 @@
                 const checkFirebase = () => {
                     if (window.firebaseApp) {
                         setReady(true);
-                        // Reactのレンダリングが確実に始まってからローダーを消すための微調整
-                        setTimeout(() => {
-                            const loader = document.getElementById('loader');
-                            if (loader) loader.style.display = 'none';
-                        }, 500);
+                        document.getElementById('loader').style.display = 'none';
                     }
                 };
                 checkFirebase();
@@ -138,21 +126,11 @@
 
             useEffect(() => {
                 if (!ready) return;
-                const { auth, onAuthStateChanged, signOut } = window.firebaseApp;
-                return onAuthStateChanged(auth, async (u) => {
-                    if (u) {
-                        const email = u.email || "";
-                        if (email.endsWith('@gmail.com')) {
-                            setUser(u);
-                            setErrorMessage(null);
-                        } else {
-                            await signOut(auth);
-                            setErrorMessage("@gmail.comドメインのアカウントのみアクセス可能です。");
-                        }
-                    } else {
-                        setUser(null);
-                    }
+                const { auth, signInAnonymously, onAuthStateChanged } = window.firebaseApp;
+                signInAnonymously(auth).catch(err => {
+                    if (err.code === 'auth/configuration-not-found') setErrorMessage("匿名認証を有効にしてください。");
                 });
+                return onAuthStateChanged(auth, setUser);
             }, [ready]);
 
             useEffect(() => {
@@ -163,96 +141,31 @@
                     if (docSnap.exists()) {
                         const data = docSnap.data();
                         const roles = Array.isArray(data.roles) ? data.roles : ['共通'];
-                        setConfig({
+                        const normalized = {
                             roles: roles,
                             roleMajors: data.roleMajors || { '共通': [] }
+                        };
+                        setConfig(normalized);
+                        
+                        // ポイント：関数型アップデートを使用して、最新のステートに基づき選択職種を維持または初期設定する
+                        setSelectedRoleForSettings(current => {
+                            if (!current || !roles.includes(current)) {
+                                return roles.length > 0 ? roles[0] : '';
+                            }
+                            return current;
                         });
-                        setSelectedRoleForSettings(current => (!current || !roles.includes(current)) ? (roles[0] || '') : current);
                     } else {
                         setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'app_config', 'settings'), config);
                     }
-                }, (error) => {
-                    console.error("Config fetch error:", error);
                 });
 
                 const unsubTasks = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'tasks'), (snapshot) => {
                     setTasks(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                     setLoading(false);
-                }, (error) => {
-                    console.error("Tasks fetch error:", error);
                 });
 
                 return () => { unsubConfig(); unsubTasks(); };
             }, [ready, user]);
-
-            const copyToClipboard = (text) => {
-                try {
-                    const tempInput = document.createElement("textarea");
-                    tempInput.value = text;
-                    tempInput.style.position = "fixed";
-                    tempInput.style.left = "-9999px";
-                    tempInput.style.top = "0";
-                    document.body.appendChild(tempInput);
-                    tempInput.focus();
-                    tempInput.select();
-                    document.execCommand("copy");
-                    document.body.removeChild(tempInput);
-                    setCopyStatus('コピー成功！');
-                } catch (err) {
-                    console.error("Copy failed", err);
-                }
-                setTimeout(() => setCopyStatus('コピー'), 2000);
-            };
-
-            const handleLogin = async () => {
-                const { auth, GoogleAuthProvider, signInWithPopup } = window.firebaseApp;
-                try {
-                    setErrorMessage(null);
-                    await signInWithPopup(auth, new GoogleAuthProvider());
-                } catch (e) {
-                    if (e.code === 'auth/unauthorized-domain') {
-                        const currentDomain = window.location.hostname || "";
-                        setErrorMessage(
-                            <div className="space-y-4 animate-fade-in text-left">
-                                <div className="flex items-center gap-2 text-rose-600 font-bold">
-                                    <i data-lucide="alert-triangle"></i>
-                                    <span>ドメイン未承認エラー</span>
-                                </div>
-                                <p className="text-[11px] text-slate-600 leading-relaxed">
-                                    Firebaseに以下のドメインを1つずつ追加してください。
-                                </p>
-                                
-                                <div className="space-y-2">
-                                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl">
-                                        <p className="text-[10px] text-blue-500 font-bold mb-1">① GitHub Pages用</p>
-                                        <div className="flex items-center justify-between gap-2">
-                                            <code className="text-[12px] font-mono font-bold text-blue-900 selectable-domain">aoki-10.github.io</code>
-                                            <button onClick={() => copyToClipboard("aoki-10.github.io")} className="px-2 py-1 bg-blue-600 text-white text-[10px] rounded-lg font-bold">{copyStatus}</button>
-                                        </div>
-                                    </div>
-
-                                    {currentDomain && (
-                                        <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
-                                            <p className="text-[10px] text-slate-400 font-bold mb-1">② このプレビュー画面用</p>
-                                            <div className="flex items-center justify-between gap-2">
-                                                <code className="text-[11px] font-mono text-slate-700 truncate max-w-[140px] selectable-domain">{currentDomain}</code>
-                                                <button onClick={() => copyToClipboard(currentDomain)} className="px-2 py-1 bg-slate-500 text-white text-[10px] rounded-lg font-bold">コピー</button>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        );
-                    } else {
-                        setErrorMessage(`ログインに失敗しました: ${e.message}`);
-                    }
-                }
-            };
-
-            const handleLogout = async () => {
-                const { auth, signOut } = window.firebaseApp;
-                await signOut(auth);
-            };
 
             const handleSaveConfig = async (newConfig) => {
                 if (!ready || !user) return;
@@ -260,164 +173,219 @@
                 await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'app_config', 'settings'), newConfig);
             };
 
-            const handleDragStart = (e, index) => { setDraggedIndex(index); e.dataTransfer.effectAllowed = "move"; };
-            const handleDragOver = (e, index) => { e.preventDefault(); if (draggedIndex === index) return; setDragOverIndex(index); };
-            const handleDragEnd = () => {
-                if (draggedIndex !== null && dragOverIndex !== null) {
-                    const majors = [...(config.roleMajors[selectedRoleForSettings] || [])];
-                    const [item] = majors.splice(draggedIndex, 1);
-                    majors.splice(dragOverIndex, 0, item);
-                    handleSaveConfig({ ...config, roleMajors: { ...config.roleMajors, [selectedRoleForSettings]: majors } });
-                }
-                setDraggedIndex(null); setDragOverIndex(null);
-            };
-            const handleTouchStart = (e, index) => { longPressTimer.current = setTimeout(() => { setDraggedIndex(index); if (navigator.vibrate) navigator.vibrate(50); }, 500); };
-            const handleTouchMove = (e, index) => {
-                if (draggedIndex === null) { clearTimeout(longPressTimer.current); return; }
-                e.preventDefault();
-                const target = document.elementFromPoint(e.touches[0].clientX, e.touches[0].clientY)?.closest('[data-index]');
-                if (target) setDragOverIndex(parseInt(target.getAttribute('data-index')));
-            };
-            const handleTouchEnd = () => { clearTimeout(longPressTimer.current); handleDragEnd(); };
-
+            // --- 職種操作 ---
             const addRole = () => {
                 const name = newRoleInput?.trim();
                 if (!name || config.roles.includes(name)) return;
-                handleSaveConfig({ ...config, roles: [...config.roles, name], roleMajors: { ...config.roleMajors, [name]: [] } });
-                setNewRoleInput(''); setSelectedRoleForSettings(name);
+                const nextConfig = { 
+                    ...config, 
+                    roles: [...config.roles, name], 
+                    roleMajors: { ...config.roleMajors, [name]: [] } 
+                };
+                handleSaveConfig(nextConfig);
+                setNewRoleInput('');
+                setSelectedRoleForSettings(name);
             };
+
+            const startEditRole = (idx) => {
+                setEditingRoleIndex(idx);
+                setEditingRoleValue(config.roles[idx]);
+            };
+
             const saveEditedRole = async () => {
                 const oldName = config.roles[editingRoleIndex];
                 const newName = editingRoleValue?.trim();
-                if (!newName || oldName === newName) { setEditingRoleIndex(null); return; }
+                if (!newName || oldName === newName) {
+                    setEditingRoleIndex(null);
+                    return;
+                }
+
                 const { db, appId, collection, writeBatch, doc } = window.firebaseApp;
                 const batch = writeBatch(db);
-                tasks.filter(t => t.role === oldName).forEach(t => batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', t.id), { role: newName }));
-                const newRoles = [...config.roles]; newRoles[editingRoleIndex] = newName;
-                const newMajors = { ...config.roleMajors }; newMajors[newName] = newMajors[oldName] || []; delete newMajors[oldName];
+                tasks.filter(t => t.role === oldName).forEach(t => {
+                    batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', t.id), { role: newName });
+                });
+
+                const newRoles = [...config.roles];
+                newRoles[editingRoleIndex] = newName;
+                const newMajors = { ...config.roleMajors };
+                newMajors[newName] = newMajors[oldName] || [];
+                delete newMajors[oldName];
+
                 await batch.commit();
                 handleSaveConfig({ ...config, roles: newRoles, roleMajors: newMajors });
-                setEditingRoleIndex(null); if (selectedRoleForSettings === oldName) setSelectedRoleForSettings(newName);
+                setEditingRoleIndex(null);
+                if (selectedRoleForSettings === oldName) setSelectedRoleForSettings(newName);
             };
 
+            const removeRole = (index) => {
+                const role = config.roles[index];
+                if (!confirm(`職種「${role}」を削除しますか？`)) return;
+                const newRoles = config.roles.filter((_, i) => i !== index);
+                const newMajors = { ...config.roleMajors }; delete newMajors[role];
+                handleSaveConfig({ ...config, roles: newRoles, roleMajors: newMajors });
+                if (selectedRoleForSettings === role) setSelectedRoleForSettings(newRoles[0] || '');
+            };
+
+            // --- 大区分操作 ---
             const addMajorToRole = () => {
                 const name = newMajorInput?.trim();
                 if (!name || !selectedRoleForSettings) return;
                 const currentMajors = config.roleMajors[selectedRoleForSettings] || [];
                 if (currentMajors.includes(name)) return;
-                handleSaveConfig({ ...config, roleMajors: { ...config.roleMajors, [selectedRoleForSettings]: [...currentMajors, name] } });
+                const nextConfig = { 
+                    ...config, 
+                    roleMajors: { 
+                        ...config.roleMajors, 
+                        [selectedRoleForSettings]: [...currentMajors, name] 
+                    } 
+                };
+                handleSaveConfig(nextConfig);
                 setNewMajorInput('');
             };
-            const startEditMajor = (idx) => { setEditingMajorIndex(idx); setEditingMajorValue(config.roleMajors[selectedRoleForSettings][idx]); };
+
+            const startEditMajor = (idx) => {
+                setEditingMajorIndex(idx);
+                setEditingMajorValue(config.roleMajors[selectedRoleForSettings][idx]);
+            };
+
             const saveEditedMajor = async () => {
                 const oldMajor = config.roleMajors[selectedRoleForSettings][editingMajorIndex];
                 const newMajor = editingMajorValue?.trim();
-                if (!newMajor || oldMajor === newMajor) { setEditingMajorIndex(null); return; }
+                if (!newMajor || oldMajor === newMajor) {
+                    setEditingMajorIndex(null);
+                    return;
+                }
+
                 const { db, appId, writeBatch, doc } = window.firebaseApp;
                 const batch = writeBatch(db);
-                tasks.filter(t => t.role === selectedRoleForSettings && t.major === oldMajor).forEach(t => batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', t.id), { major: newMajor }));
-                const updatedMajors = [...config.roleMajors[selectedRoleForSettings]]; updatedMajors[editingMajorIndex] = newMajor;
+                tasks.filter(t => t.role === selectedRoleForSettings && t.major === oldMajor).forEach(t => {
+                    batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', t.id), { major: newMajor });
+                });
+
+                const updatedMajors = [...config.roleMajors[selectedRoleForSettings]];
+                updatedMajors[editingMajorIndex] = newMajor;
+                
                 await batch.commit();
-                handleSaveConfig({ ...config, roleMajors: { ...config.roleMajors, [selectedRoleForSettings]: updatedMajors } });
+                handleSaveConfig({ 
+                    ...config, 
+                    roleMajors: { ...config.roleMajors, [selectedRoleForSettings]: updatedMajors } 
+                });
                 setEditingMajorIndex(null);
             };
+
             const removeMajorFromRole = (idx) => {
-                const nextConfig = { ...config, roleMajors: { ...config.roleMajors, [selectedRoleForSettings]: (config.roleMajors[selectedRoleForSettings] || []).filter((_, i) => i !== idx) } };
+                const majors = config.roleMajors[selectedRoleForSettings] || [];
+                const nextConfig = { 
+                    ...config, 
+                    roleMajors: { 
+                        ...config.roleMajors, 
+                        [selectedRoleForSettings]: majors.filter((_, i) => i !== idx) 
+                    } 
+                };
                 handleSaveConfig(nextConfig);
             };
 
+            const handleAuth = () => {
+                if (authInput === MASTER_PASSCODE) setIsAuthorized(true);
+                else alert('パスコードが正しくありません');
+            };
+
             const filteredTasks = useMemo(() => {
-                let f = tasks || [];
+                let f = tasks;
                 if (roleFilter !== 'すべて') f = f.filter(t => t.role === roleFilter);
                 if (searchTerm) {
                     const s = searchTerm.toLowerCase();
-                    f = f.filter(t => ( (t.major||'') + (t.medium||'') + (t.owner||'')).toLowerCase().includes(s));
+                    f = f.filter(t => (t.major + (t.medium||'') + (t.owner||'')).toLowerCase().includes(s));
                 }
-                const roleMajorsOrder = config.roleMajors[roleFilter] || [];
-                return [...f].sort((a,b) => {
-                    const aRole = a.role || '';
-                    const bRole = b.role || '';
-                    if (aRole !== bRole) return aRole.localeCompare(bRole, 'ja');
-                    
-                    const aIdx = roleMajorsOrder.indexOf(a.major);
-                    const bIdx = roleMajorsOrder.indexOf(b.major);
-                    if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
-                    
-                    return (a.major || '').localeCompare(b.major || '', 'ja');
-                });
-            }, [tasks, roleFilter, searchTerm, config]);
+                return f.sort((a,b) => (a.role+a.major).localeCompare(b.role+b.major, 'ja'));
+            }, [tasks, roleFilter, searchTerm]);
 
             const handleSaveTask = async () => {
+                if (!ready || !user) return;
                 const { db, appId, collection, doc, addDoc, updateDoc } = window.firebaseApp;
-                const data = { ...formData, updatedBy: user.email, updatedAt: Date.now() };
-                if (editingTask) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', editingTask.id), data);
-                else await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'tasks'), { ...data, createdAt: Date.now() });
+                if (editingTask) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', editingTask.id), formData);
+                else await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'tasks'), { ...formData, createdAt: Date.now() });
                 setIsModalOpen(false);
             };
 
             const confirmDelete = async () => {
+                if (!ready || !deleteConfirm) return;
                 const { db, appId, doc, deleteDoc } = window.firebaseApp;
                 await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', deleteConfirm));
-                setDeleteConfirm(null); setIsModalOpen(false); setEditingTask(null);
+                setDeleteConfirm(null);
+                setIsModalOpen(false);
+                setEditingTask(null);
+            };
+
+            const exportToExcel = () => {
+                const title = `業務一覧_${new Date().toISOString().split('T')[0]}`;
+                let html = `<html><head><meta charset="utf-8"><style>table{border-collapse:collapse;} th,td{border:1px solid #ccc;padding:8px;font-size:12px;} th{background:#eee;}</style></head><body><h3>${title}</h3><table border="1"><thead><tr><th>職種</th><th>大区分</th><th>中区分</th><th>小区分</th><th>担当</th><th>確認</th><th>W</th><th>引継</th><th>FROM</th><th>TO</th><th>メモ</th></tr></thead><tbody>`;
+                filteredTasks.forEach(t => {
+                    html += `<tr><td>${t.role}</td><td>${t.major}</td><td>${t.medium}</td><td>${t.minor||''}</td><td>${t.owner||''}</td><td>${t.verifier||''}</td><td>${t.doubleCheck}</td><td>${t.handover}</td><td>${t.handoverFrom||''}</td><td>${t.handoverTo||''}</td><td>${t.memo||''}</td></tr>`;
+                });
+                html += `</tbody></table></body></html>`;
+                const blob = new Blob([html], { type: 'application/vnd.ms-excel' });
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(blob);
+                link.download = `${title}.xls`;
+                link.click();
             };
 
             if (!ready) return null;
 
-            if (!user) {
+            if (errorMessage) {
                 return (
-                    <div className="h-screen flex items-center justify-center p-6 bg-slate-900">
-                        <div className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl animate-fade-in text-center">
-                            <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
-                                <i data-lucide="shield-check" size="32"></i>
-                            </div>
-                            <h2 className="text-xl font-bold mb-2">業務管理システム</h2>
-                            <p className="text-slate-500 text-sm mb-8">Googleアカウントでログインしてください<br/><span className="text-[10px] text-slate-400">(@gmail.com 限定)</span></p>
-                            {errorMessage && <div className="mb-6 p-5 bg-rose-50 rounded-2xl border border-rose-100">{errorMessage}</div>}
-                            <button onClick={handleLogin} className="w-full flex items-center justify-center gap-3 bg-white border border-slate-200 py-4 rounded-2xl font-black shadow-sm active:scale-95 transition-all hover:bg-slate-50">
-                                <img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" className="w-5 h-5" />
-                                Googleでログイン
-                            </button>
+                    <div className="h-screen flex items-center justify-center p-6 bg-slate-900 text-white">
+                        <div className="max-w-md bg-slate-800 p-8 rounded-3xl border border-rose-500/30 text-center">
+                            <h2 className="text-xl font-bold mb-4">設定エラー</h2>
+                            <p className="text-slate-300 text-sm mb-8">{errorMessage}</p>
+                            <button onClick={() => window.location.reload()} className="w-full py-3 bg-blue-600 rounded-xl font-bold">再試行</button>
                         </div>
                     </div>
                 );
             }
 
-            if (loading) {
+            if (!isAuthorized && !loading) {
                 return (
-                    <div className="h-screen flex flex-col items-center justify-center p-6 bg-slate-50 space-y-4">
-                        <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                        <p className="text-slate-400 font-bold italic">データを同期中...</p>
+                    <div className="h-screen flex items-center justify-center p-6 bg-slate-900 text-slate-900">
+                        <div className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl animate-fade-in">
+                            <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                                <i data-lucide="lock" size="32"></i>
+                            </div>
+                            <h2 className="text-xl font-bold text-center mb-2">業務管理システム</h2>
+                            <p className="text-slate-500 text-sm text-center mb-6">パスコードを入力してください</p>
+                            <input 
+                                type="password" 
+                                className="w-full px-4 py-3 bg-slate-100 rounded-xl mb-4 text-center text-lg outline-none focus:ring-2 focus:ring-blue-500 transition-all" 
+                                placeholder="パスコードを入力" 
+                                value={authInput}
+                                onChange={(e) => setAuthInput(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && handleAuth()}
+                            />
+                            <button onClick={handleAuth} className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold shadow-lg shadow-blue-200 active:scale-95 transition-all">認証する</button>
+                        </div>
                     </div>
                 );
             }
+
+            if (loading) return <div className="h-screen flex items-center justify-center text-slate-400 font-bold italic">Loading data...</div>;
 
             return (
                 <div className="max-w-7xl mx-auto p-4 md:p-8 pb-32">
+                    {/* Header */}
                     <div className="flex justify-between items-center mb-6">
-                        <div>
-                            <h1 className="text-xl md:text-2xl font-bold text-slate-900 flex items-center gap-2">
-                                <span className="bg-blue-600 p-1.5 rounded-lg text-white"><i data-lucide="layout-grid" size="18"></i></span>
-                                業務分担管理
-                            </h1>
-                            <div className="flex items-center gap-2 mt-1">
-                                {user.photoURL && <img src={user.photoURL} className="w-5 h-5 rounded-full border border-slate-200" />}
-                                <span className="text-[10px] text-slate-400 font-bold">{user.email}</span>
-                                <button onClick={handleLogout} className="text-[10px] text-blue-600 hover:underline">ログアウト</button>
-                            </div>
-                        </div>
-                        <div className="flex gap-2">
+                        <h1 className="text-xl md:text-2xl font-bold text-slate-900 flex items-center gap-2">
+                            <span className="bg-blue-600 p-1.5 rounded-lg text-white"><i data-lucide="layout-grid" size="18"></i></span>
+                            業務分担管理
+                        </h1>
+                        <div className="flex gap-2 text-slate-600">
                             <button onClick={() => setIsSettingsOpen(true)} className="p-2.5 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm"><i data-lucide="settings" size="20"></i></button>
-                            <button onClick={() => {
-                                const firstRole = config.roles[0] || '共通';
-                                setEditingTask(null); 
-                                setFormData({ major: config.roleMajors[firstRole]?.[0] || '', medium: '', minor: '', owner: '', verifier: '', doubleCheck: '－', handover: '×', role: firstRole, handoverFrom: '', handoverTo: '', memo: '' }); 
-                                setIsModalOpen(true);
-                            }} className="hidden md:flex items-center gap-2 bg-blue-600 text-white px-5 py-2.5 rounded-xl font-bold shadow-lg shadow-blue-100 active:scale-95 transition-all">
-                                <i data-lucide="plus" size="18"></i> 業務追加
-                            </button>
+                            <button onClick={exportToExcel} className="p-2.5 bg-white border border-slate-200 rounded-xl text-emerald-600 transition-all shadow-sm"><i data-lucide="file-spreadsheet" size="20"></i></button>
                         </div>
                     </div>
 
+                    {/* Filter Bar */}
                     <div className="space-y-3 mb-6">
                         <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1 text-slate-900">
                             <button onClick={() => setRoleFilter('すべて')} className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-all ${roleFilter === 'すべて' ? 'bg-slate-800 text-white shadow-md' : 'bg-white text-slate-500 border border-slate-200'}`}>すべて</button>
@@ -431,14 +399,14 @@
                         </div>
                     </div>
 
-                    {/* テーブル表示 */}
+                    {/* Task Table */}
                     <div className="hidden md:block bg-white rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-200 overflow-hidden">
                         <table className="w-full text-left">
                             <thead className="bg-slate-50/80 border-b border-slate-200">
                                 <tr className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
                                     <th className="px-6 py-4">職種 / 大区分</th>
                                     <th className="px-6 py-4">中区分</th>
-                                    <th className="px-6 py-4">担当者 / 確認者</th>
+                                    <th className="px-6 py-4">担当者</th>
                                     <th className="px-6 py-4 text-center">W</th>
                                     <th className="px-6 py-4 text-center">引継ぎ</th>
                                     <th className="px-6 py-4 text-right">操作</th>
@@ -469,29 +437,31 @@
                         </table>
                     </div>
 
+                    {/* Mobile Card View */}
                     <div className="md:hidden space-y-4">
                         {filteredTasks.map(t => (
                             <div key={t.id} className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm active:bg-slate-50 transition-colors" onClick={() => { setEditingTask(t); setFormData({...t}); setIsModalOpen(true); }}>
                                 <div className="flex justify-between items-start mb-3">
                                     <span className="px-2 py-0.5 bg-slate-100 text-[10px] font-black text-slate-500 rounded-md">{t.role}</span>
-                                    <span className={`text-2xl leading-none font-bold ${t.handover === '◎' ? 'text-green-600' : t.handover === '×' ? 'text-rose-400' : t.handover === '－' ? 'text-slate-300' : 'text-blue-500'}`}>{t.handover}</span>
+                                    <span className={`text-2xl leading-none ${t.handover === '◎' ? 'text-green-600' : t.handover === '×' ? 'text-rose-400' : t.handover === '－' ? 'text-slate-400' : 'text-blue-500'}`}>{t.handover}</span>
                                 </div>
                                 <h3 className="font-bold text-slate-900 mb-1 leading-snug">{t.medium}</h3>
-                                <p className="text-xs text-slate-400 font-medium">{t.major}</p>
+                                <p className="text-xs text-slate-400">{t.major}</p>
                             </div>
                         ))}
                     </div>
 
+                    {/* Floating Add Button */}
                     <button onClick={() => { 
                         const firstRole = config.roles[0] || '共通';
                         setEditingTask(null); 
                         setFormData({ major: config.roleMajors[firstRole]?.[0] || '', medium: '', minor: '', owner: '', verifier: '', doubleCheck: '－', handover: '×', role: firstRole, handoverFrom: '', handoverTo: '', memo: '' }); 
                         setIsModalOpen(true); 
-                    }} className="md:hidden fixed bottom-6 right-6 w-14 h-14 bg-blue-600 text-white rounded-2xl shadow-xl flex items-center justify-center z-40 active:scale-90 transition-all">
+                    }} className="fixed bottom-6 right-6 w-14 h-14 bg-blue-600 text-white rounded-2xl shadow-xl flex items-center justify-center z-40 transition-transform active:scale-90">
                         <i data-lucide="plus"></i>
                     </button>
 
-                    {/* モーダル部分 */}
+                    {/* Task Entry Modal */}
                     {isModalOpen && (
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end md:items-center justify-center p-0 md:p-4 text-slate-900">
                             <div className="bg-white w-full max-w-2xl rounded-t-3xl md:rounded-3xl flex flex-col max-h-[92vh] overflow-hidden animate-fade-in">
@@ -522,7 +492,7 @@
                                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">小区分 (詳細)</label>
                                         <textarea className="w-full px-4 py-3 bg-slate-50 rounded-2xl h-20 outline-none resize-none focus:ring-2 focus:ring-blue-500" value={formData.minor} onChange={e => setFormData({...formData, minor: e.target.value})} />
                                     </div>
-                                    <div className="grid grid-cols-2 gap-4 text-sm font-bold">
+                                    <div className="grid grid-cols-2 gap-4 text-sm">
                                         <input className="w-full px-4 py-3 bg-slate-50 rounded-2xl outline-none" placeholder="担当者氏名" value={formData.owner} onChange={e => setFormData({...formData, owner: e.target.value})} />
                                         <input className="w-full px-4 py-3 bg-slate-50 rounded-2xl outline-none" placeholder="確認責任者" value={formData.verifier} onChange={e => setFormData({...formData, verifier: e.target.value})} />
                                     </div>
@@ -544,13 +514,12 @@
                                             </div>
                                         </div>
                                     </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <input className="px-4 py-3 bg-slate-50 rounded-2xl text-xs outline-none" value={formData.handoverFrom} onChange={e => setFormData({...formData, handoverFrom: e.target.value})} placeholder="FROM: 誰から" />
+                                        <input className="px-4 py-3 bg-slate-50 rounded-2xl text-xs outline-none" value={formData.handoverTo} onChange={e => setFormData({...formData, handoverTo: e.target.value})} placeholder="TO: 誰へ" />
+                                    </div>
                                     <textarea className="w-full px-4 py-3 bg-slate-50 rounded-2xl h-24 outline-none resize-none focus:ring-2 focus:ring-blue-500" placeholder="備考・メモ" value={formData.memo} onChange={e => setFormData({...formData, memo: e.target.value})} />
-                                    {editingTask && (
-                                        <div className="pt-4 space-y-4">
-                                            <div className="text-[10px] text-slate-300 font-bold uppercase text-center">最終更新: {editingTask.updatedBy || '不明'} ({editingTask.updatedAt ? new Date(editingTask.updatedAt).toLocaleString() : '日付不明'})</div>
-                                            <button onClick={() => setDeleteConfirm(editingTask.id)} className="w-full py-4 text-rose-500 font-bold bg-rose-50 rounded-2xl active:bg-rose-100 transition-colors">このデータを削除する</button>
-                                        </div>
-                                    )}
+                                    {editingTask && <button onClick={() => setDeleteConfirm(editingTask.id)} className="w-full py-4 text-rose-500 font-bold bg-rose-50 rounded-2xl transition-colors hover:bg-rose-100">このデータを削除する</button>}
                                 </div>
                                 <div className="p-6 border-t bg-white safe-area-bottom">
                                     <button onClick={handleSaveTask} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black shadow-lg shadow-blue-100 active:scale-95 transition-all">保存して閉じる</button>
@@ -559,77 +528,72 @@
                         </div>
                     )}
 
+                    {/* Settings Modal */}
                     {isSettingsOpen && (
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4 text-slate-900">
                             <div className="bg-white w-full max-w-4xl max-h-[85vh] rounded-3xl overflow-hidden flex flex-col shadow-2xl animate-fade-in">
-                                <div className="p-6 border-b flex justify-between items-center bg-white">
-                                    <h2 className="font-bold flex items-center gap-2"><i data-lucide="settings" size="18"></i> システム設定</h2>
-                                    <button onClick={() => setIsSettingsOpen(false)} className="p-2 bg-slate-100 rounded-full"><i data-lucide="x"></i></button>
+                                <div className="p-6 border-b flex justify-between items-center bg-white sticky top-0">
+                                    <h2 className="font-bold flex items-center gap-2"><i data-lucide="settings" size="18"></i> システム詳細設定</h2>
+                                    <button onClick={() => setIsSettingsOpen(false)} className="p-2"><i data-lucide="x"></i></button>
                                 </div>
                                 <div className="flex-1 overflow-y-auto p-6 md:p-8 space-y-10">
+                                    <div className="p-4 bg-blue-50 border border-blue-100 rounded-2xl text-blue-800 text-[10px] md:text-xs">
+                                        ※パスコードは「1870」に固定されています。職種名や区分名を編集すると、既存データも自動更新されます。
+                                    </div>
                                     <section className="flex flex-col md:flex-row gap-8">
+                                        {/* Roles Section */}
                                         <div className="md:w-1/3 space-y-4">
-                                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">職種</h3>
+                                            <h3 className="text-xs font-black text-slate-400 mb-2 uppercase tracking-widest">職種の管理</h3>
                                             <div className="space-y-2">
                                                 {config.roles.map((r, i) => (
-                                                    <div key={i} className={`flex items-center gap-2 p-1 rounded-xl ${selectedRoleForSettings === r ? 'bg-blue-50 ring-1 ring-blue-100' : 'bg-slate-50'}`}>
+                                                    <div key={i} className={`flex items-center gap-2 p-1 rounded-xl transition-all ${selectedRoleForSettings === r ? 'bg-blue-50 ring-1 ring-blue-200' : 'bg-slate-50'}`}>
                                                         {editingRoleIndex === i ? (
                                                             <div className="flex-1 flex gap-1 animate-fade-in">
-                                                                <input autoFocus className="flex-1 px-3 py-1.5 text-sm bg-white rounded-lg outline-none ring-2 ring-blue-500" value={editingRoleValue} onChange={e => setEditingRoleValue(e.target.value)} />
-                                                                <button onClick={saveEditedRole} className="p-1.5 text-green-600 hover:bg-green-50 rounded-lg"><i data-lucide="check" size="16"></i></button>
+                                                                <input autoFocus className="flex-1 px-3 py-2 text-sm bg-white rounded-lg outline-none ring-2 ring-blue-500" value={editingRoleValue} onChange={e => setEditingRoleValue(e.target.value)} />
+                                                                <button onClick={saveEditedRole} className="p-2 text-green-600 hover:bg-green-50 rounded-lg"><i data-lucide="check" size="16"></i></button>
+                                                                <button onClick={() => setEditingRoleIndex(null)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-lg"><i data-lucide="x" size="16"></i></button>
                                                             </div>
                                                         ) : (
                                                             <>
-                                                                <button onClick={() => setSelectedRoleForSettings(r)} className={`flex-1 text-left px-4 py-2.5 rounded-lg text-sm font-bold ${selectedRoleForSettings === r ? 'text-blue-600' : 'text-slate-500'}`}>{r}</button>
-                                                                <button onClick={() => startEditRole(i)} className="p-2 text-slate-300 hover:text-blue-500"><i data-lucide="pencil" size="14"></i></button>
-                                                                <button onClick={() => removeRole(i)} className="p-2 text-slate-300 hover:text-rose-500"><i data-lucide="trash-2" size="14"></i></button>
+                                                                <button onClick={() => setSelectedRoleForSettings(r)} className={`flex-1 text-left px-4 py-2.5 rounded-lg text-sm font-bold transition-all ${selectedRoleForSettings === r ? 'text-blue-600' : 'text-slate-500 hover:bg-white/50'}`}>{r}</button>
+                                                                <button onClick={() => startEditRole(i)} className="p-2 text-slate-400 hover:text-blue-500"><i data-lucide="pencil" size="14"></i></button>
+                                                                <button onClick={() => removeRole(i)} className="p-2 text-slate-400 hover:text-rose-500"><i data-lucide="trash-2" size="14"></i></button>
                                                             </>
                                                         )}
                                                     </div>
                                                 ))}
                                             </div>
                                             <div className="flex gap-1">
-                                                <input className="flex-1 px-4 py-3 bg-white border border-slate-200 rounded-xl text-sm outline-none" placeholder="新職種..." value={newRoleInput} onChange={e => setNewRoleInput(e.target.value)} />
-                                                <button onClick={addRole} className="p-3 bg-blue-600 text-white rounded-xl active:scale-95 transition-all"><i data-lucide="plus" size="18"></i></button>
+                                                <input className="flex-1 px-4 py-3 bg-white border border-slate-200 rounded-xl text-sm outline-none shadow-sm focus:ring-2 focus:ring-blue-500 transition-all" placeholder="新職種..." value={newRoleInput} onChange={e => setNewRoleInput(e.target.value)} />
+                                                <button onClick={addRole} className="p-3 bg-blue-600 text-white rounded-xl shadow-lg active:scale-95 transition-all"><i data-lucide="plus" size="18"></i></button>
                                             </div>
                                         </div>
 
+                                        {/* Majors Section */}
                                         <div className="flex-1 space-y-4">
-                                            <h3 className="text-sm font-bold flex items-center justify-between">
-                                                「{selectedRoleForSettings}」の大区分
-                                                <span className="text-[10px] text-slate-400 font-normal bg-slate-100 px-2 py-0.5 rounded">長押しで並び替え</span>
-                                            </h3>
-                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                            <h3 className="text-sm font-bold mb-2">「{selectedRoleForSettings}」の大区分</h3>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
                                                 {(config.roleMajors[selectedRoleForSettings] || []).map((m, i) => (
-                                                    <div key={i} data-index={i}
-                                                        draggable={editingMajorIndex === null}
-                                                        onDragStart={(e) => handleDragStart(e, i)}
-                                                        onDragOver={(e) => handleDragOver(e, i)}
-                                                        onDragEnd={handleDragEnd}
-                                                        onTouchStart={(e) => handleTouchStart(e, i)}
-                                                        onTouchMove={(e) => handleTouchMove(e, i)}
-                                                        onTouchEnd={handleTouchEnd}
-                                                        className={`flex items-center gap-2 px-3 py-1 bg-slate-50 rounded-xl border-2 transition-all cursor-move select-none
-                                                            ${draggedIndex === i ? 'dragging touch-active' : 'border-slate-100'} 
-                                                            ${dragOverIndex === i ? 'drag-over' : ''}`}>
+                                                    <div key={i} className="flex items-center gap-2 px-3 py-1 bg-slate-50 rounded-xl border border-slate-100">
                                                         {editingMajorIndex === i ? (
-                                                            <div className="flex-1 flex gap-1 py-1" onPointerDown={e => e.stopPropagation()}>
+                                                            <div className="flex-1 flex gap-1 py-1 animate-fade-in">
                                                                 <input autoFocus className="flex-1 px-3 py-1.5 text-sm bg-white rounded-lg outline-none ring-2 ring-blue-500" value={editingMajorValue} onChange={e => setEditingMajorValue(e.target.value)} />
-                                                                <button onClick={saveEditedMajor} className="p-1.5 text-green-600 rounded-lg"><i data-lucide="check" size="16"></i></button>
+                                                                <button onClick={saveEditedMajor} className="p-1.5 text-green-600 hover:bg-green-50 rounded-lg"><i data-lucide="check" size="16"></i></button>
+                                                                <button onClick={() => setEditingMajorIndex(null)} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg"><i data-lucide="x" size="16"></i></button>
                                                             </div>
                                                         ) : (
                                                             <>
                                                                 <span className="flex-1 text-sm font-bold text-slate-700 py-2">{m}</span>
-                                                                <button onClick={(e) => { e.stopPropagation(); setEditingMajorIndex(i); setEditingMajorValue(m || ""); }} className="p-2 text-slate-300 hover:text-blue-500"><i data-lucide="pencil" size="14"></i></button>
-                                                                <button onClick={(e) => { e.stopPropagation(); removeMajorFromRole(i); }} className="p-2 text-slate-300 hover:text-rose-500"><i data-lucide="x" size="16"></i></button>
+                                                                <button onClick={() => startEditMajor(i)} className="p-2 text-slate-400 hover:text-blue-500"><i data-lucide="pencil" size="14"></i></button>
+                                                                <button onClick={() => removeMajorFromRole(i)} className="p-2 text-slate-400 hover:text-rose-500"><i data-lucide="x" size="16"></i></button>
                                                             </>
                                                         )}
                                                     </div>
                                                 ))}
                                             </div>
                                             <div className="flex gap-2">
-                                                <input className="flex-1 px-4 py-3 bg-white border border-slate-200 rounded-xl text-sm outline-none" placeholder="新規区分..." value={newMajorInput} onChange={e => setNewMajorInput(e.target.value)} />
-                                                <button onClick={addMajorToRole} className="px-6 bg-slate-800 text-white rounded-xl active:scale-95 transition-all"><i data-lucide="plus" size="18"></i></button>
+                                                <input className="flex-1 px-4 py-3 bg-white border border-slate-200 rounded-xl text-sm outline-none shadow-sm focus:ring-2 focus:ring-blue-500 transition-all" placeholder="新規区分を登録..." value={newMajorInput} onChange={e => setNewMajorInput(e.target.value)} />
+                                                <button onClick={addMajorToRole} className="px-6 bg-slate-800 text-white rounded-xl shadow-lg active:scale-95 transition-all"><i data-lucide="plus" size="18"></i></button>
                                             </div>
                                         </div>
                                     </section>
@@ -638,6 +602,7 @@
                         </div>
                     )}
 
+                    {/* Delete Confirm Overlay */}
                     {deleteConfirm && (
                         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4 text-center">
                             <div className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl animate-fade-in text-slate-900">
@@ -655,9 +620,8 @@
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
-        setInterval(() => {
-            if (typeof lucide !== 'undefined') lucide.createIcons();
-        }, 1000);
+        const updateIcons = () => lucide.createIcons();
+        setInterval(updateIcons, 1000);
     </script>
 </body>
 </html>
