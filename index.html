@@ -110,7 +110,7 @@
                 handoverFrom: '', handoverTo: '', memo: ''
             });
 
-            const handoverLabels = { '◎': '完了', '〇': 'たまに確認OK', '△': '引き継ぎ中', '×': '未着手' };
+            const handoverLabels = { '◎': '完了', '〇': 'たまに確認OK', '△': '引き継ぎ中', '×': '未着手', '－': 'なし' };
 
             useEffect(() => {
                 const checkFirebase = () => {
@@ -149,11 +149,9 @@
                         
                         // ポイント：関数型アップデートを使用して、最新のステートに基づき選択職種を維持または初期設定する
                         setSelectedRoleForSettings(current => {
-                            // 何も選択されていない、または現在の選択がリストにない場合のみ最初の職種を選択
                             if (!current || !roles.includes(current)) {
                                 return roles.length > 0 ? roles[0] : '';
                             }
-                            // それ以外（既に何か選ばれている）は現在の選択を維持
                             return current;
                         });
                     } else {
@@ -167,7 +165,7 @@
                 });
 
                 return () => { unsubConfig(); unsubTasks(); };
-            }, [ready, user]); // selectedRoleForSettingsを依存配列から外し、関数型アップデートで対応
+            }, [ready, user]);
 
             const handleSaveConfig = async (newConfig) => {
                 if (!ready || !user) return;
@@ -186,7 +184,6 @@
                 };
                 handleSaveConfig(nextConfig);
                 setNewRoleInput('');
-                // 新しく追加した職種を自動選択する
                 setSelectedRoleForSettings(name);
             };
 
@@ -315,11 +312,7 @@
             const confirmDelete = async () => {
                 if (!ready || !deleteConfirm) return;
                 const { db, appId, doc, deleteDoc } = window.firebaseApp;
-                
-                // データの削除を実行
                 await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', deleteConfirm));
-                
-                // 全ての確認・編集画面を閉じる
                 setDeleteConfirm(null);
                 setIsModalOpen(false);
                 setEditingTask(null);
@@ -433,7 +426,7 @@
                                         </td>
                                         <td className="px-6 py-4 text-center font-bold text-slate-400">{t.doubleCheck}</td>
                                         <td className="px-6 py-4 text-center text-xl font-bold">
-                                            <span className={t.handover === '◎' ? 'text-green-600' : t.handover === '×' ? 'text-rose-400' : 'text-blue-500'}>{t.handover}</span>
+                                            <span className={t.handover === '◎' ? 'text-green-600' : t.handover === '×' ? 'text-rose-400' : t.handover === '－' ? 'text-slate-400' : 'text-blue-500'}>{t.handover}</span>
                                         </td>
                                         <td className="px-6 py-4 text-right opacity-0 group-hover:opacity-100 transition-opacity">
                                             <button onClick={() => { setEditingTask(t); setFormData({...t}); setIsModalOpen(true); }} className="p-2 text-slate-400 hover:text-blue-600"><i data-lucide="pencil" size="16"></i></button>
@@ -450,7 +443,7 @@
                             <div key={t.id} className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm active:bg-slate-50 transition-colors" onClick={() => { setEditingTask(t); setFormData({...t}); setIsModalOpen(true); }}>
                                 <div className="flex justify-between items-start mb-3">
                                     <span className="px-2 py-0.5 bg-slate-100 text-[10px] font-black text-slate-500 rounded-md">{t.role}</span>
-                                    <span className={`text-2xl leading-none ${t.handover === '◎' ? 'text-green-600' : t.handover === '×' ? 'text-rose-400' : 'text-blue-500'}`}>{t.handover}</span>
+                                    <span className={`text-2xl leading-none ${t.handover === '◎' ? 'text-green-600' : t.handover === '×' ? 'text-rose-400' : t.handover === '－' ? 'text-slate-400' : 'text-blue-500'}`}>{t.handover}</span>
                                 </div>
                                 <h3 className="font-bold text-slate-900 mb-1 leading-snug">{t.medium}</h3>
                                 <p className="text-xs text-slate-400">{t.major}</p>
