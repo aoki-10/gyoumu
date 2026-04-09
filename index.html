@@ -140,12 +140,22 @@
                 const unsubConfig = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'app_config', 'settings'), (docSnap) => {
                     if (docSnap.exists()) {
                         const data = docSnap.data();
+                        const roles = Array.isArray(data.roles) ? data.roles : ['共通'];
                         const normalized = {
-                            roles: Array.isArray(data.roles) ? data.roles : ['共通'],
+                            roles: roles,
                             roleMajors: data.roleMajors || { '共通': [] }
                         };
                         setConfig(normalized);
-                        if (!selectedRoleForSettings && normalized.roles.length > 0) setSelectedRoleForSettings(normalized.roles[0]);
+                        
+                        // ポイント：関数型アップデートを使用して、最新のステートに基づき選択職種を維持または初期設定する
+                        setSelectedRoleForSettings(current => {
+                            // 何も選択されていない、または現在の選択がリストにない場合のみ最初の職種を選択
+                            if (!current || !roles.includes(current)) {
+                                return roles.length > 0 ? roles[0] : '';
+                            }
+                            // それ以外（既に何か選ばれている）は現在の選択を維持
+                            return current;
+                        });
                     } else {
                         setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'app_config', 'settings'), config);
                     }
@@ -157,7 +167,7 @@
                 });
 
                 return () => { unsubConfig(); unsubTasks(); };
-            }, [ready, user]);
+            }, [ready, user]); // selectedRoleForSettingsを依存配列から外し、関数型アップデートで対応
 
             const handleSaveConfig = async (newConfig) => {
                 if (!ready || !user) return;
@@ -176,6 +186,8 @@
                 };
                 handleSaveConfig(nextConfig);
                 setNewRoleInput('');
+                // 新しく追加した職種を自動選択する
+                setSelectedRoleForSettings(name);
             };
 
             const startEditRole = (idx) => {
