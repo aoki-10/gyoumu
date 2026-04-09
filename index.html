@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="robots" content="noindex, nofollow">
-    <!-- PWA meta tags -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="業務管理">
@@ -192,7 +191,6 @@
                     return;
                 }
 
-                // Firestore内のタスクデータも一括更新
                 const { db, appId, collection, writeBatch, doc } = window.firebaseApp;
                 const batch = writeBatch(db);
                 tasks.filter(t => t.role === oldName).forEach(t => {
@@ -250,7 +248,6 @@
                     return;
                 }
 
-                // タスクデータの区分名も一括更新
                 const { db, appId, writeBatch, doc } = window.firebaseApp;
                 const batch = writeBatch(db);
                 tasks.filter(t => t.role === selectedRoleForSettings && t.major === oldMajor).forEach(t => {
@@ -306,8 +303,14 @@
             const confirmDelete = async () => {
                 if (!ready || !deleteConfirm) return;
                 const { db, appId, doc, deleteDoc } = window.firebaseApp;
+                
+                // データの削除を実行
                 await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', deleteConfirm));
+                
+                // 全ての確認・編集画面を閉じる
                 setDeleteConfirm(null);
+                setIsModalOpen(false);
+                setEditingTask(null);
             };
 
             const exportToExcel = () => {
@@ -571,6 +574,7 @@
                                                             <div className="flex-1 flex gap-1 py-1 animate-fade-in">
                                                                 <input autoFocus className="flex-1 px-3 py-1.5 text-sm bg-white rounded-lg outline-none ring-2 ring-blue-500" value={editingMajorValue} onChange={e => setEditingMajorValue(e.target.value)} />
                                                                 <button onClick={saveEditedMajor} className="p-1.5 text-green-600 hover:bg-green-50 rounded-lg"><i data-lucide="check" size="16"></i></button>
+                                                                <button onClick={() => setEditingMajorIndex(null)} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg"><i data-lucide="x" size="16"></i></button>
                                                             </div>
                                                         ) : (
                                                             <>
@@ -593,7 +597,7 @@
                         </div>
                     )}
 
-                    {/* Delete Confirm */}
+                    {/* Delete Confirm Overlay */}
                     {deleteConfirm && (
                         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4 text-center">
                             <div className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl animate-fade-in text-slate-900">
