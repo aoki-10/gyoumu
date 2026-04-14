@@ -34,6 +34,13 @@
         }
         .animate-fade-in { animation: fadeIn 0.2s ease-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* ドラッグ＆ドロップ用スタイル */
+        .dragging { opacity: 0.4; background: #eff6ff !important; border: 2px dashed #3b82f6 !important; }
+        .drag-over { border-top: 3px solid #3b82f6 !important; }
+        .sortable-item { cursor: grab; transition: transform 0.1s; }
+        .sortable-item:active { cursor: grabbing; }
+        .touch-dragging { transform: scale(1.02); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); z-index: 50; }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-800">
@@ -72,9 +79,8 @@
     </script>
 
     <script type="text/babel">
-        const { useState, useEffect, useMemo } = React;
+        const { useState, useEffect, useMemo, useRef } = React;
 
-        // パスコード固定
         const MASTER_PASSCODE = "1870";
 
         const App = () => {
@@ -87,7 +93,6 @@
             const [authInput, setAuthInput] = useState('');
             const [errorMessage, setErrorMessage] = useState(null);
             
-            // UI States
             const [isModalOpen, setIsModalOpen] = useState(false);
             const [isSettingsOpen, setIsSettingsOpen] = useState(false);
             const [selectedRoleForSettings, setSelectedRoleForSettings] = useState('');
@@ -103,6 +108,12 @@
             const [editingRoleValue, setEditingRoleValue] = useState('');
             const [editingMajorIndex, setEditingMajorIndex] = useState(null);
             const [editingMajorValue, setEditingMajorValue] = useState('');
+
+            // 並び替え用State
+            const [draggedIndex, setDraggedIndex] = useState(null);
+            const [dragOverIndex, setDragOverIndex] = useState(null);
+            const [dragType, setDragType] = useState(null); // 'role' or 'major'
+            const longPressTimer = useRef(null);
 
             const [formData, setFormData] = useState({
                 major: '', medium: '', minor: '', owner: '', verifier: '', 
@@ -146,14 +157,7 @@
                             roleMajors: data.roleMajors || { '共通': [] }
                         };
                         setConfig(normalized);
-                        
-                        // ポイント：関数型アップデートを使用して、最新のステートに基づき選択職種を維持または初期設定する
-                        setSelectedRoleForSettings(current => {
-                            if (!current || !roles.includes(current)) {
-                                return roles.length > 0 ? roles[0] : '';
-                            }
-                            return current;
-                        });
+                        setSelectedRoleForSettings(current => (!current || !roles.includes(current)) ? (roles[0] || '') : current);
                     } else {
                         setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'app_config', 'settings'), config);
                     }
@@ -173,45 +177,70 @@
                 await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'app_config', 'settings'), newConfig);
             };
 
+            // --- 共通並び替えロジック ---
+            const handleSortEnd = () => {
+                if (draggedIndex === null || dragOverIndex === null || draggedIndex === dragOverIndex) {
+                    setDraggedIndex(null); setDragOverIndex(null); setDragType(null);
+                    return;
+                }
+
+                if (dragType === 'role') {
+                    const newRoles = [...config.roles];
+                    const item = newRoles.splice(draggedIndex, 1)[0];
+                    newRoles.splice(dragOverIndex, 0, item);
+                    handleSaveConfig({ ...config, roles: newRoles });
+                } else if (dragType === 'major') {
+                    const newMajors = [...(config.roleMajors[selectedRoleForSettings] || [])];
+                    const item = newMajors.splice(draggedIndex, 1)[0];
+                    newMajors.splice(dragOverIndex, 0, item);
+                    handleSaveConfig({ 
+                        ...config, 
+                        roleMajors: { ...config.roleMajors, [selectedRoleForSettings]: newMajors } 
+                    });
+                }
+
+                setDraggedIndex(null); setDragOverIndex(null); setDragType(null);
+            };
+
+            const startTouchSort = (index, type) => {
+                longPressTimer.current = setTimeout(() => {
+                    setDraggedIndex(index);
+                    setDragType(type);
+                    if (navigator.vibrate) navigator.vibrate(50);
+                }, 500);
+            };
+
+            const moveTouchSort = (e) => {
+                if (draggedIndex === null) { clearTimeout(longPressTimer.current); return; }
+                e.preventDefault();
+                const touch = e.touches[0];
+                const element = document.elementFromPoint(touch.clientX, touch.clientY)?.closest('[data-index]');
+                if (element) {
+                    const targetIdx = parseInt(element.getAttribute('data-index'));
+                    const targetType = element.getAttribute('data-type');
+                    if (targetType === dragType) setDragOverIndex(targetIdx);
+                }
+            };
+
             // --- 職種操作 ---
             const addRole = () => {
                 const name = newRoleInput?.trim();
                 if (!name || config.roles.includes(name)) return;
-                const nextConfig = { 
-                    ...config, 
-                    roles: [...config.roles, name], 
-                    roleMajors: { ...config.roleMajors, [name]: [] } 
-                };
+                const nextConfig = { ...config, roles: [...config.roles, name], roleMajors: { ...config.roleMajors, [name]: [] } };
                 handleSaveConfig(nextConfig);
                 setNewRoleInput('');
                 setSelectedRoleForSettings(name);
             };
 
-            const startEditRole = (idx) => {
-                setEditingRoleIndex(idx);
-                setEditingRoleValue(config.roles[idx]);
-            };
-
             const saveEditedRole = async () => {
                 const oldName = config.roles[editingRoleIndex];
                 const newName = editingRoleValue?.trim();
-                if (!newName || oldName === newName) {
-                    setEditingRoleIndex(null);
-                    return;
-                }
-
-                const { db, appId, collection, writeBatch, doc } = window.firebaseApp;
+                if (!newName || oldName === newName) { setEditingRoleIndex(null); return; }
+                const { db, appId, writeBatch, doc } = window.firebaseApp;
                 const batch = writeBatch(db);
-                tasks.filter(t => t.role === oldName).forEach(t => {
-                    batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', t.id), { role: newName });
-                });
-
-                const newRoles = [...config.roles];
-                newRoles[editingRoleIndex] = newName;
-                const newMajors = { ...config.roleMajors };
-                newMajors[newName] = newMajors[oldName] || [];
-                delete newMajors[oldName];
-
+                tasks.filter(t => t.role === oldName).forEach(t => batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', t.id), { role: newName }));
+                const newRoles = [...config.roles]; newRoles[editingRoleIndex] = newName;
+                const newMajors = { ...config.roleMajors }; newMajors[newName] = newMajors[oldName] || []; delete newMajors[oldName];
                 await batch.commit();
                 handleSaveConfig({ ...config, roles: newRoles, roleMajors: newMajors });
                 setEditingRoleIndex(null);
@@ -233,57 +262,26 @@
                 if (!name || !selectedRoleForSettings) return;
                 const currentMajors = config.roleMajors[selectedRoleForSettings] || [];
                 if (currentMajors.includes(name)) return;
-                const nextConfig = { 
-                    ...config, 
-                    roleMajors: { 
-                        ...config.roleMajors, 
-                        [selectedRoleForSettings]: [...currentMajors, name] 
-                    } 
-                };
-                handleSaveConfig(nextConfig);
+                handleSaveConfig({ ...config, roleMajors: { ...config.roleMajors, [selectedRoleForSettings]: [...currentMajors, name] } });
                 setNewMajorInput('');
-            };
-
-            const startEditMajor = (idx) => {
-                setEditingMajorIndex(idx);
-                setEditingMajorValue(config.roleMajors[selectedRoleForSettings][idx]);
             };
 
             const saveEditedMajor = async () => {
                 const oldMajor = config.roleMajors[selectedRoleForSettings][editingMajorIndex];
                 const newMajor = editingMajorValue?.trim();
-                if (!newMajor || oldMajor === newMajor) {
-                    setEditingMajorIndex(null);
-                    return;
-                }
-
+                if (!newMajor || oldMajor === newMajor) { setEditingMajorIndex(null); return; }
                 const { db, appId, writeBatch, doc } = window.firebaseApp;
                 const batch = writeBatch(db);
-                tasks.filter(t => t.role === selectedRoleForSettings && t.major === oldMajor).forEach(t => {
-                    batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', t.id), { major: newMajor });
-                });
-
-                const updatedMajors = [...config.roleMajors[selectedRoleForSettings]];
-                updatedMajors[editingMajorIndex] = newMajor;
-                
+                tasks.filter(t => t.role === selectedRoleForSettings && t.major === oldMajor).forEach(t => batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', t.id), { major: newMajor }));
+                const updatedMajors = [...config.roleMajors[selectedRoleForSettings]]; updatedMajors[editingMajorIndex] = newMajor;
                 await batch.commit();
-                handleSaveConfig({ 
-                    ...config, 
-                    roleMajors: { ...config.roleMajors, [selectedRoleForSettings]: updatedMajors } 
-                });
+                handleSaveConfig({ ...config, roleMajors: { ...config.roleMajors, [selectedRoleForSettings]: updatedMajors } });
                 setEditingMajorIndex(null);
             };
 
             const removeMajorFromRole = (idx) => {
                 const majors = config.roleMajors[selectedRoleForSettings] || [];
-                const nextConfig = { 
-                    ...config, 
-                    roleMajors: { 
-                        ...config.roleMajors, 
-                        [selectedRoleForSettings]: majors.filter((_, i) => i !== idx) 
-                    } 
-                };
-                handleSaveConfig(nextConfig);
+                handleSaveConfig({ ...config, roleMajors: { ...config.roleMajors, [selectedRoleForSettings]: majors.filter((_, i) => i !== idx) } });
             };
 
             const handleAuth = () => {
@@ -298,8 +296,15 @@
                     const s = searchTerm.toLowerCase();
                     f = f.filter(t => (t.major + (t.medium||'') + (t.owner||'')).toLowerCase().includes(s));
                 }
-                return f.sort((a,b) => (a.role+a.major).localeCompare(b.role+b.major, 'ja'));
-            }, [tasks, roleFilter, searchTerm]);
+                // 表示順の制御: configのrolesとroleMajorsの順番に従う
+                return [...f].sort((a, b) => {
+                    const roleAIdx = config.roles.indexOf(a.role);
+                    const roleBIdx = config.roles.indexOf(b.role);
+                    if (roleAIdx !== roleBIdx) return roleAIdx - roleBIdx;
+                    const majors = config.roleMajors[a.role] || [];
+                    return majors.indexOf(a.major) - majors.indexOf(b.major);
+                });
+            }, [tasks, roleFilter, searchTerm, config]);
 
             const handleSaveTask = async () => {
                 if (!ready || !user) return;
@@ -399,7 +404,7 @@
                         </div>
                     </div>
 
-                    {/* Task Table */}
+                    {/* Task Table & Mobile View (省略なし) */}
                     <div className="hidden md:block bg-white rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-200 overflow-hidden">
                         <table className="w-full text-left">
                             <thead className="bg-slate-50/80 border-b border-slate-200">
@@ -437,21 +442,19 @@
                         </table>
                     </div>
 
-                    {/* Mobile Card View */}
                     <div className="md:hidden space-y-4">
                         {filteredTasks.map(t => (
                             <div key={t.id} className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm active:bg-slate-50 transition-colors" onClick={() => { setEditingTask(t); setFormData({...t}); setIsModalOpen(true); }}>
                                 <div className="flex justify-between items-start mb-3">
                                     <span className="px-2 py-0.5 bg-slate-100 text-[10px] font-black text-slate-500 rounded-md">{t.role}</span>
-                                    <span className={`text-2xl leading-none ${t.handover === '◎' ? 'text-green-600' : t.handover === '×' ? 'text-rose-400' : t.handover === '－' ? 'text-slate-400' : 'text-blue-500'}`}>{t.handover}</span>
+                                    <span className={`text-2xl leading-none font-bold ${t.handover === '◎' ? 'text-green-600' : t.handover === '×' ? 'text-rose-400' : t.handover === '－' ? 'text-slate-300' : 'text-blue-500'}`}>{t.handover}</span>
                                 </div>
                                 <h3 className="font-bold text-slate-900 mb-1 leading-snug">{t.medium}</h3>
-                                <p className="text-xs text-slate-400">{t.major}</p>
+                                <p className="text-xs text-slate-400 font-medium">{t.major}</p>
                             </div>
                         ))}
                     </div>
 
-                    {/* Floating Add Button */}
                     <button onClick={() => { 
                         const firstRole = config.roles[0] || '共通';
                         setEditingTask(null); 
@@ -461,7 +464,7 @@
                         <i data-lucide="plus"></i>
                     </button>
 
-                    {/* Task Entry Modal */}
+                    {/* Task Entry Modal (省略なし) */}
                     {isModalOpen && (
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end md:items-center justify-center p-0 md:p-4 text-slate-900">
                             <div className="bg-white w-full max-w-2xl rounded-t-3xl md:rounded-3xl flex flex-col max-h-[92vh] overflow-hidden animate-fade-in">
@@ -492,7 +495,7 @@
                                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">小区分 (詳細)</label>
                                         <textarea className="w-full px-4 py-3 bg-slate-50 rounded-2xl h-20 outline-none resize-none focus:ring-2 focus:ring-blue-500" value={formData.minor} onChange={e => setFormData({...formData, minor: e.target.value})} />
                                     </div>
-                                    <div className="grid grid-cols-2 gap-4 text-sm">
+                                    <div className="grid grid-cols-2 gap-4 text-sm font-bold">
                                         <input className="w-full px-4 py-3 bg-slate-50 rounded-2xl outline-none" placeholder="担当者氏名" value={formData.owner} onChange={e => setFormData({...formData, owner: e.target.value})} />
                                         <input className="w-full px-4 py-3 bg-slate-50 rounded-2xl outline-none" placeholder="確認責任者" value={formData.verifier} onChange={e => setFormData({...formData, verifier: e.target.value})} />
                                     </div>
@@ -528,27 +531,44 @@
                         </div>
                     )}
 
-                    {/* Settings Modal */}
+                    {/* Settings Modal (並び替え機能追加) */}
                     {isSettingsOpen && (
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4 text-slate-900">
-                            <div className="bg-white w-full max-w-4xl max-h-[85vh] rounded-3xl overflow-hidden flex flex-col shadow-2xl animate-fade-in">
+                            <div className="bg-white w-full max-w-4xl max-h-[85vh] rounded-3xl overflow-hidden flex flex-col shadow-2xl animate-fade-in" onTouchMove={moveTouchSort} onTouchEnd={handleSortEnd}>
                                 <div className="p-6 border-b flex justify-between items-center bg-white sticky top-0">
                                     <h2 className="font-bold flex items-center gap-2"><i data-lucide="settings" size="18"></i> システム詳細設定</h2>
                                     <button onClick={() => setIsSettingsOpen(false)} className="p-2"><i data-lucide="x"></i></button>
                                 </div>
                                 <div className="flex-1 overflow-y-auto p-6 md:p-8 space-y-10">
                                     <div className="p-4 bg-blue-50 border border-blue-100 rounded-2xl text-blue-800 text-[10px] md:text-xs">
-                                        ※パスコードは「1870」に固定されています。職種名や区分名を編集すると、既存データも自動更新されます。
+                                        ※項目をドラッグ（スマホは長押し）で並び替えができます。
                                     </div>
                                     <section className="flex flex-col md:flex-row gap-8">
                                         {/* Roles Section */}
                                         <div className="md:w-1/3 space-y-4">
-                                            <h3 className="text-xs font-black text-slate-400 mb-2 uppercase tracking-widest">職種の管理</h3>
-                                            <div className="space-y-2">
+                                            <h3 className="text-xs font-black text-slate-400 mb-2 uppercase tracking-widest flex items-center justify-between">
+                                                職種の管理
+                                                <span className="text-[10px] text-slate-300 font-normal">並べ替え可</span>
+                                            </h3>
+                                            <div className="space-y-2 min-h-[50px]">
                                                 {config.roles.map((r, i) => (
-                                                    <div key={i} className={`flex items-center gap-2 p-1 rounded-xl transition-all ${selectedRoleForSettings === r ? 'bg-blue-50 ring-1 ring-blue-200' : 'bg-slate-50'}`}>
+                                                    <div 
+                                                        key={r} 
+                                                        data-index={i}
+                                                        data-type="role"
+                                                        draggable={editingRoleIndex === null}
+                                                        onDragStart={() => { setDraggedIndex(i); setDragType('role'); }}
+                                                        onDragOver={(e) => { e.preventDefault(); if (dragType === 'role') setDragOverIndex(i); }}
+                                                        onDragEnd={handleSortEnd}
+                                                        onTouchStart={() => startTouchSort(i, 'role')}
+                                                        className={`flex items-center gap-2 p-1 rounded-xl transition-all sortable-item
+                                                            ${selectedRoleForSettings === r ? 'bg-blue-50 ring-1 ring-blue-200' : 'bg-slate-50'}
+                                                            ${draggedIndex === i && dragType === 'role' ? 'dragging touch-dragging' : ''}
+                                                            ${dragOverIndex === i && dragType === 'role' ? 'drag-over' : ''}
+                                                        `}
+                                                    >
                                                         {editingRoleIndex === i ? (
-                                                            <div className="flex-1 flex gap-1 animate-fade-in">
+                                                            <div className="flex-1 flex gap-1 animate-fade-in" onPointerDown={e => e.stopPropagation()}>
                                                                 <input autoFocus className="flex-1 px-3 py-2 text-sm bg-white rounded-lg outline-none ring-2 ring-blue-500" value={editingRoleValue} onChange={e => setEditingRoleValue(e.target.value)} />
                                                                 <button onClick={saveEditedRole} className="p-2 text-green-600 hover:bg-green-50 rounded-lg"><i data-lucide="check" size="16"></i></button>
                                                                 <button onClick={() => setEditingRoleIndex(null)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-lg"><i data-lucide="x" size="16"></i></button>
@@ -556,8 +576,8 @@
                                                         ) : (
                                                             <>
                                                                 <button onClick={() => setSelectedRoleForSettings(r)} className={`flex-1 text-left px-4 py-2.5 rounded-lg text-sm font-bold transition-all ${selectedRoleForSettings === r ? 'text-blue-600' : 'text-slate-500 hover:bg-white/50'}`}>{r}</button>
-                                                                <button onClick={() => startEditRole(i)} className="p-2 text-slate-400 hover:text-blue-500"><i data-lucide="pencil" size="14"></i></button>
-                                                                <button onClick={() => removeRole(i)} className="p-2 text-slate-400 hover:text-rose-500"><i data-lucide="trash-2" size="14"></i></button>
+                                                                <button onClick={(e) => { e.stopPropagation(); setEditingRoleIndex(i); setEditingRoleValue(r); }} className="p-2 text-slate-400 hover:text-blue-500"><i data-lucide="pencil" size="14"></i></button>
+                                                                <button onClick={(e) => { e.stopPropagation(); removeRole(i); }} className="p-2 text-slate-400 hover:text-rose-500"><i data-lucide="trash-2" size="14"></i></button>
                                                             </>
                                                         )}
                                                     </div>
@@ -571,12 +591,28 @@
 
                                         {/* Majors Section */}
                                         <div className="flex-1 space-y-4">
-                                            <h3 className="text-sm font-bold mb-2">「{selectedRoleForSettings}」の大区分</h3>
-                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
+                                            <h3 className="text-sm font-bold mb-2 flex items-center justify-between">
+                                                「{selectedRoleForSettings}」の大区分
+                                                <span className="text-[10px] text-slate-300 font-normal">並べ替え可</span>
+                                            </h3>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4 min-h-[50px]">
                                                 {(config.roleMajors[selectedRoleForSettings] || []).map((m, i) => (
-                                                    <div key={i} className="flex items-center gap-2 px-3 py-1 bg-slate-50 rounded-xl border border-slate-100">
+                                                    <div 
+                                                        key={m} 
+                                                        data-index={i}
+                                                        data-type="major"
+                                                        draggable={editingMajorIndex === null}
+                                                        onDragStart={() => { setDraggedIndex(i); setDragType('major'); }}
+                                                        onDragOver={(e) => { e.preventDefault(); if (dragType === 'major') setDragOverIndex(i); }}
+                                                        onDragEnd={handleSortEnd}
+                                                        onTouchStart={() => startTouchSort(i, 'major')}
+                                                        className={`flex items-center gap-2 px-3 py-1 bg-slate-50 rounded-xl border-2 transition-all sortable-item
+                                                            ${draggedIndex === i && dragType === 'major' ? 'dragging touch-dragging' : 'border-slate-100'} 
+                                                            ${dragOverIndex === i && dragType === 'major' ? 'drag-over' : ''}
+                                                        `}
+                                                    >
                                                         {editingMajorIndex === i ? (
-                                                            <div className="flex-1 flex gap-1 py-1 animate-fade-in">
+                                                            <div className="flex-1 flex gap-1 py-1 animate-fade-in" onPointerDown={e => e.stopPropagation()}>
                                                                 <input autoFocus className="flex-1 px-3 py-1.5 text-sm bg-white rounded-lg outline-none ring-2 ring-blue-500" value={editingMajorValue} onChange={e => setEditingMajorValue(e.target.value)} />
                                                                 <button onClick={saveEditedMajor} className="p-1.5 text-green-600 hover:bg-green-50 rounded-lg"><i data-lucide="check" size="16"></i></button>
                                                                 <button onClick={() => setEditingMajorIndex(null)} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg"><i data-lucide="x" size="16"></i></button>
@@ -584,8 +620,8 @@
                                                         ) : (
                                                             <>
                                                                 <span className="flex-1 text-sm font-bold text-slate-700 py-2">{m}</span>
-                                                                <button onClick={() => startEditMajor(i)} className="p-2 text-slate-400 hover:text-blue-500"><i data-lucide="pencil" size="14"></i></button>
-                                                                <button onClick={() => removeMajorFromRole(i)} className="p-2 text-slate-400 hover:text-rose-500"><i data-lucide="x" size="16"></i></button>
+                                                                <button onClick={(e) => { e.stopPropagation(); setEditingMajorIndex(i); setEditingMajorValue(m); }} className="p-2 text-slate-400 hover:text-blue-500"><i data-lucide="pencil" size="14"></i></button>
+                                                                <button onClick={(e) => { e.stopPropagation(); removeMajorFromRole(i); }} className="p-2 text-slate-400 hover:text-rose-500"><i data-lucide="x" size="16"></i></button>
                                                             </>
                                                         )}
                                                     </div>
@@ -620,7 +656,7 @@
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
-        const updateIcons = () => lucide.createIcons();
+        const updateIcons = () => { if (typeof lucide !== 'undefined') lucide.createIcons(); };
         setInterval(updateIcons, 1000);
     </script>
 </body>
