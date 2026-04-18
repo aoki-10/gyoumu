@@ -52,6 +52,17 @@
             color: #166534;
             border: 1px solid #bbf7d0;
         }
+        .filter-panel {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            max-height: 0;
+            opacity: 0;
+            overflow: hidden;
+        }
+        .filter-panel.open {
+            max-height: 300px;
+            opacity: 1;
+            margin-top: 1rem;
+        }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-800">
@@ -95,7 +106,7 @@
 
         const MASTER_PASSCODE = "1870";
 
-        // フォームデータの初期構造
+        // フォームデータの初期構造（undefinedエラー防止用）
         const initialFormData = {
             dept: '', major: '', medium: '', small: '', chargeTag: '', 
             owner: '', ownerSuccessor: '', 
@@ -124,16 +135,17 @@
             // UIステート
             const [isModalOpen, setIsModalOpen] = useState(false);
             const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+            const [isFilterOpen, setIsFilterOpen] = useState(false);
             const [selectedDeptForSettings, setSelectedDeptForSettings] = useState('');
             const [selectedMajorForSettings, setSelectedMajorForSettings] = useState('');
             const [deleteConfirm, setDeleteConfirm] = useState(null);
             const [editingTask, setEditingTask] = useState(null);
             
-            // フィルタ設定
+            // 検索・絞り込み
             const [filters, setFilters] = useState({ dept: 'すべて', major: 'すべて', tag: 'すべて' });
             const [searchTerm, setSearchTerm] = useState('');
 
-            // 並び替え用ステート
+            // 並び替え用
             const [draggedIndex, setDraggedIndex] = useState(null);
             const [dragOverIndex, setDragOverIndex] = useState(null);
             const [dragType, setDragType] = useState(null); 
@@ -257,7 +269,6 @@
                 }
             };
 
-            // 安全に大区分リストを生成（TypeError防止）
             const majorListForFilter = useMemo(() => {
                 const set = new Set();
                 if (filters.dept === 'すべて') {
@@ -271,7 +282,6 @@
                 return Array.from(set).sort();
             }, [filters.dept, config]);
 
-            // 安全に担当課タグリストを生成（TypeError防止）
             const tagListForFilter = useMemo(() => {
                 const set = new Set();
                 if (filters.dept === 'すべて') {
@@ -440,50 +450,76 @@
                     <div className="flex justify-between items-center mb-8">
                         <h1 className="text-xl md:text-2xl font-black text-slate-900 flex items-center gap-2 text-nowrap">
                             <span className="bg-blue-600 p-1.5 rounded-lg text-white"><i data-lucide="clipboard-list" size="18"></i></span>
-                            業務分担管理 <span className="text-xs text-slate-300 font-normal">v4.6</span>
+                            業務分担管理 <span className="text-xs text-slate-300 font-normal">v5.0</span>
                         </h1>
                         <div className="flex gap-2">
                             <button onClick={() => setIsSettingsOpen(true)} className="p-2.5 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm"><i data-lucide="settings" size="20"></i></button>
                         </div>
                     </div>
 
-                    {/* Filter Section (UIをタグ抽出に修正) */}
-                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-6 mb-8 font-bold text-slate-700 text-sm">
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">1. 部署で抽出</label>
-                                <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                                    <button onClick={() => setFilters({...filters, dept: 'すべて', major: 'すべて', tag: 'すべて'})} className={`px-4 py-1.5 rounded-full text-[10px] whitespace-nowrap transition-all ${filters.dept === 'すべて' ? 'bg-slate-800 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>すべて</button>
-                                    {(config.depts || []).map(d => (
-                                        <button key={d} onClick={() => setFilters({...filters, dept: d, major: 'すべて', tag: 'すべて'})} className={`px-4 py-1.5 rounded-full text-[10px] whitespace-nowrap transition-all ${filters.dept === d ? 'bg-blue-600 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>{d}</button>
-                                    ))}
-                                </div>
+                    {/* Search & Detail Filter Bar (NEW UI) */}
+                    <div className="bg-white p-4 md:p-5 rounded-3xl border border-slate-200 shadow-sm mb-8">
+                        <div className="flex items-center gap-3">
+                            <div className="relative flex-1 group">
+                                <i data-lucide="search" className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300 group-focus-within:text-blue-500 transition-colors" size="20"></i>
+                                <input 
+                                    type="text" 
+                                    placeholder="業務名・担当者・メモなどで検索..." 
+                                    className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border border-transparent rounded-2xl outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm transition-all font-bold" 
+                                    value={searchTerm} 
+                                    onChange={e => setSearchTerm(e.target.value)} 
+                                />
                             </div>
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">2. 大区分で抽出</label>
-                                <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                                    <button onClick={() => setFilters({...filters, major: 'すべて'})} className={`px-4 py-1.5 rounded-full text-[10px] whitespace-nowrap transition-all ${filters.major === 'すべて' ? 'bg-slate-800 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>すべて</button>
-                                    {majorListForFilter.map(m => (
-                                        <button key={m} onClick={() => setFilters({...filters, major: m})} className={`px-4 py-1.5 rounded-full text-[10px] whitespace-nowrap transition-all ${filters.major === m ? 'bg-indigo-500 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>{m}</button>
-                                    ))}
-                                </div>
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">3. 担当課タグで抽出 (部署連動)</label>
-                                <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                                    <button onClick={() => setFilters({...filters, tag: 'すべて'})} className={`px-4 py-1.5 rounded-full text-[10px] whitespace-nowrap transition-all ${filters.tag === 'すべて' ? 'bg-emerald-600 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>すべて</button>
-                                    {tagListForFilter.map(ct => (
-                                        <button key={ct} onClick={() => setFilters({...filters, tag: ct})} className={`px-4 py-1.5 rounded-full text-[10px] whitespace-nowrap transition-all ${filters.tag === ct ? 'bg-emerald-600 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>{ct}</button>
-                                    ))}
-                                </div>
-                            </div>
+                            <button 
+                                onClick={() => setIsFilterOpen(!isFilterOpen)} 
+                                className={`p-3.5 rounded-2xl border transition-all flex items-center gap-2 font-black text-xs ${isFilterOpen ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                            >
+                                <i data-lucide="filter" size="18"></i>
+                                <span className="hidden md:inline">詳細絞り込み</span>
+                            </button>
                         </div>
-                        <div className="relative">
-                            <i data-lucide="search" className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size="18"></i>
-                            <input type="text" placeholder="キーワード検索（担当者名・詳細など）..." className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border border-transparent rounded-2xl outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm transition-all" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+
+                        {/* Collapsible Filter Panel */}
+                        <div className={`filter-panel ${isFilterOpen ? 'open' : ''}`}>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-slate-50">
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">1. 部署を選択</label>
+                                    <select 
+                                        className="w-full px-4 py-3 bg-slate-50 border border-transparent rounded-xl outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-bold"
+                                        value={filters.dept}
+                                        onChange={e => setFilters({...filters, dept: e.target.value, major: 'すべて', tag: 'すべて'})}
+                                    >
+                                        <option value="すべて">すべての部署</option>
+                                        {(config.depts || []).map(d => <option key={d} value={d}>{d}</option>)}
+                                    </select>
+                                </div>
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">2. 大区分 (部署連動)</label>
+                                    <select 
+                                        className="w-full px-4 py-3 bg-slate-50 border border-transparent rounded-xl outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-bold"
+                                        value={filters.major}
+                                        onChange={e => setFilters({...filters, major: e.target.value})}
+                                    >
+                                        <option value="すべて">すべての大区分</option>
+                                        {majorListForFilter.map(m => <option key={m} value={m}>{m}</option>)}
+                                    </select>
+                                </div>
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">3. 担当課タグ (部署連動)</label>
+                                    <select 
+                                        className="w-full px-4 py-3 bg-slate-50 border border-transparent rounded-xl outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-bold"
+                                        value={filters.tag}
+                                        onChange={e => setFilters({...filters, tag: e.target.value})}
+                                    >
+                                        <option value="すべて">すべての担当課</option>
+                                        {tagListForFilter.map(t => <option key={t} value={t}>{t}</option>)}
+                                    </select>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
+                    {/* Task Table */}
                     <div className="bg-white rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-200 overflow-hidden mb-8">
                         <div className="overflow-x-auto font-bold">
                             <table className="w-full text-left min-w-[1100px]">
@@ -499,42 +535,49 @@
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700 text-sm">
-                                    {filteredTasks.map(t => (
-                                        <tr key={t.id} className="hover:bg-slate-50/50 group transition-colors">
-                                            <td className="px-6 py-4 whitespace-nowrap">
-                                                <div className="text-[10px] font-black text-slate-300 uppercase mb-1">{t.dept}</div>
-                                                <span className="charge-tag shadow-sm">{t.chargeTag}</span>
-                                            </td>
-                                            <td className="px-6 py-4">
-                                                <div className="flex items-center gap-2 mb-1">
-                                                    <span className="text-[9px] font-bold text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded uppercase">{t.major}</span>
-                                                    <span className="text-[10px] font-bold text-slate-400">{t.medium}</span>
-                                                </div>
-                                                <div className="text-sm font-bold text-slate-800 leading-snug">{t.small}</div>
-                                                {t.memo && <div className="text-[10px] text-slate-400 font-normal truncate max-w-[200px] mt-1 italic">備考: {t.memo}</div>}
-                                            </td>
-                                            <td className="px-6 py-4 whitespace-nowrap">
-                                                <div className="text-slate-900 font-bold">{t.owner || '-'}</div>
-                                                {t.ownerSuccessor && <div className="text-blue-500 text-[10px] font-bold mt-0.5">→ {t.ownerSuccessor}</div>}
-                                            </td>
-                                            <td className="px-6 py-4 whitespace-nowrap">
-                                                <div className="text-slate-500 font-bold">{t.verifier || '-'}</div>
-                                                {t.verifierSuccessor && <div className="text-indigo-400 text-[10px] font-bold mt-0.5">→ {t.verifierSuccessor}</div>}
-                                            </td>
-                                            <td className="px-6 py-4 text-center font-black text-slate-400">{t.doubleCheck}</td>
-                                            <td className="px-6 py-4 text-center text-xl font-bold">
-                                                <span className={t.handover === '◎' ? 'text-green-600' : t.handover === '×' ? 'text-rose-400' : t.handover === '－' ? 'text-slate-300' : 'text-blue-500'}>{t.handover}</span>
-                                            </td>
-                                            <td className="px-6 py-4 text-right opacity-0 group-hover:opacity-100 transition-opacity">
-                                                <button onClick={() => { setEditingTask(t); setFormData({ ...initialFormData, ...t }); setIsModalOpen(true); }} className="p-2 text-slate-300 hover:text-blue-600 bg-slate-100/0 hover:bg-slate-100 rounded-lg transition-all"><i data-lucide="edit-3" size="16"></i></button>
-                                            </td>
+                                    {filteredTasks.length === 0 ? (
+                                        <tr>
+                                            <td colSpan="7" className="py-20 text-center text-slate-300 italic font-medium">条件に一致する業務が見つかりません</td>
                                         </tr>
-                                    ))}
+                                    ) : (
+                                        filteredTasks.map(t => (
+                                            <tr key={t.id} className="hover:bg-slate-50/50 group transition-colors">
+                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                    <div className="text-[10px] font-black text-slate-300 uppercase mb-1">{t.dept}</div>
+                                                    <span className="charge-tag shadow-sm">{t.chargeTag}</span>
+                                                </td>
+                                                <td className="px-6 py-4">
+                                                    <div className="flex items-center gap-2 mb-1">
+                                                        <span className="text-[9px] font-bold text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded uppercase">{t.major}</span>
+                                                        <span className="text-[10px] font-bold text-slate-400">{t.medium}</span>
+                                                    </div>
+                                                    <div className="text-sm font-bold text-slate-800 leading-snug">{t.small}</div>
+                                                    {t.memo && <div className="text-[10px] text-slate-400 font-normal truncate max-w-[200px] mt-1 italic">備考: {t.memo}</div>}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                    <div className="text-slate-900 font-bold">{t.owner || '-'}</div>
+                                                    {t.ownerSuccessor && <div className="text-blue-500 text-[10px] font-bold mt-0.5">→ {t.ownerSuccessor}</div>}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                    <div className="text-slate-500 font-bold">{t.verifier || '-'}</div>
+                                                    {t.verifierSuccessor && <div className="text-indigo-400 text-[10px] font-bold mt-0.5">→ {t.verifierSuccessor}</div>}
+                                                </td>
+                                                <td className="px-6 py-4 text-center font-black text-slate-400">{t.doubleCheck}</td>
+                                                <td className="px-6 py-4 text-center text-xl font-bold">
+                                                    <span className={t.handover === '◎' ? 'text-green-600' : t.handover === '×' ? 'text-rose-400' : t.handover === '－' ? 'text-slate-300' : 'text-blue-500'}>{t.handover}</span>
+                                                </td>
+                                                <td className="px-6 py-4 text-right opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <button onClick={() => { setEditingTask(t); setFormData({ ...initialFormData, ...t }); setIsModalOpen(true); }} className="p-2 text-slate-300 hover:text-blue-600 bg-slate-100/0 hover:bg-slate-100 rounded-lg transition-all"><i data-lucide="edit-3" size="16"></i></button>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
                                 </tbody>
                             </table>
                         </div>
                     </div>
 
+                    {/* Floating Add Button */}
                     <button onClick={() => {
                         const d = config.depts[0] || '';
                         const m = (config.majors[d] || [])[0] || '';
@@ -593,8 +636,8 @@
                                         </select>
                                     </div>
                                     <div className="space-y-1">
-                                        <label className="text-[10px] uppercase tracking-widest px-1">小区分 (タスク詳細)</label>
-                                        <input required className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-blue-500 font-bold" value={formData.small || ''} onChange={e => setFormData({...formData, small: e.target.value})} placeholder="具体的な業務内容を入力" />
+                                        <label className="text-[10px] uppercase tracking-widest px-1">小区分 (具体的なタスク)</label>
+                                        <input required className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-blue-500 font-bold" value={formData.small || ''} onChange={e => setFormData({...formData, small: e.target.value})} placeholder="業務名を入力..." />
                                     </div>
 
                                     {/* 担当者・引継者登録 */}
@@ -641,7 +684,7 @@
                                             </div>
                                         </div>
                                     </div>
-                                    <textarea className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl h-24 outline-none resize-none focus:ring-2 focus:ring-emerald-500 font-medium text-xs" value={formData.memo || ''} onChange={e => setFormData({...formData, memo: e.target.value})} placeholder="備考・補足事項を記入してください" />
+                                    <textarea className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl h-24 outline-none resize-none focus:ring-2 focus:ring-emerald-500 font-medium text-xs" value={formData.memo || ''} onChange={e => setFormData({...formData, memo: e.target.value})} placeholder="補足・URLなど" />
                                     {editingTask && <button onClick={() => setDeleteConfirm(editingTask.id)} className="w-full py-4 text-rose-500 font-bold bg-rose-50 rounded-2xl border border-rose-100 flex items-center justify-center gap-2 active:bg-rose-200 transition-all shadow-sm"><i data-lucide="trash-2" size="18"></i> 削除する</button>}
                                 </div>
                                 <div className="p-6 border-t bg-white safe-area-bottom">
@@ -651,7 +694,7 @@
                         </div>
                     )}
 
-                    {/* Settings Modal */}
+                    {/* Master Settings */}
                     {isSettingsOpen && (
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4 text-slate-900 font-bold">
                             <div className="bg-white w-full max-w-[95vw] max-h-[95vh] rounded-3xl overflow-hidden flex flex-col shadow-2xl animate-fade-in" onTouchMove={moveTouchSort} onTouchEnd={handleSortEnd}>
@@ -684,13 +727,13 @@
                                                 ))}
                                             </div>
                                             <div className="flex gap-1 pt-2">
-                                                <input className="flex-1 px-4 py-2.5 bg-slate-100 border-none rounded-xl text-xs outline-none focus:ring-2 focus:ring-blue-500 font-bold" placeholder="新部署..." value={newInput.dept || ''} onChange={e => setNewInput({ ...newInput, dept: e.target.value })} />
+                                                <input className="flex-1 px-4 py-2.5 bg-slate-100 border-none rounded-xl text-xs outline-none focus:ring-2 focus:ring-blue-500 font-bold text-slate-700" placeholder="新部署..." value={newInput.dept || ''} onChange={e => setNewInput({ ...newInput, dept: e.target.value })} />
                                                 <button onClick={() => addMaster('dept')} className="p-3 bg-slate-800 text-white rounded-xl shadow-md active:scale-90"><i data-lucide="plus" size="16"></i></button>
                                             </div>
                                         </div>
                                         {/* 2. Majors */}
                                         <div className="space-y-4">
-                                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest px-1">2. 大区分 (連動)</h3>
+                                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest px-1">2. 大区分 (部署連動)</h3>
                                             <div className="space-y-2 bg-slate-50/50 p-2 rounded-2xl border border-slate-100 min-h-[100px]">
                                                 {!selectedDeptForSettings && <div className="text-center py-10 text-[10px] text-slate-300 italic font-medium">部署を選択</div>}
                                                 {(config.majors[selectedDeptForSettings] || []).map((m, i) => (
@@ -712,13 +755,13 @@
                                                 ))}
                                             </div>
                                             <div className="flex gap-1 pt-2">
-                                                <input className="flex-1 px-4 py-2.5 bg-slate-100 border-none rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500 font-bold" placeholder="新大区分..." value={newInput.major || ''} onChange={e => setNewInput({ ...newInput, major: e.target.value })} />
+                                                <input className="flex-1 px-4 py-2.5 bg-slate-100 border-none rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-slate-700" placeholder="新大区分..." value={newInput.major || ''} onChange={e => setNewInput({ ...newInput, major: e.target.value })} />
                                                 <button onClick={() => addMaster('major')} className="p-3 bg-slate-800 text-white rounded-xl shadow-md active:scale-90"><i data-lucide="plus" size="16"></i></button>
                                             </div>
                                         </div>
                                         {/* 3. Mediums */}
                                         <div className="space-y-4">
-                                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest px-1">3. 中区分 (連動)</h3>
+                                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest px-1">3. 中区分 (大区分連動)</h3>
                                             <div className="space-y-2 bg-slate-50/50 p-2 rounded-2xl border border-slate-100 min-h-[100px]">
                                                 {!selectedMajorForSettings && <div className="text-center py-10 text-[10px] text-slate-300 italic font-medium">大区分を選択</div>}
                                                 {(config.mediums[selectedMajorForSettings] || []).map((v, i) => (
@@ -740,13 +783,13 @@
                                                 ))}
                                             </div>
                                             <div className="flex gap-1 pt-2">
-                                                <input className="flex-1 px-4 py-2.5 bg-slate-100 border-none rounded-xl text-xs outline-none focus:ring-2 focus:ring-emerald-500 font-bold" placeholder="新中区分..." value={newInput.medium || ''} onChange={e => setNewInput({ ...newInput, medium: e.target.value })} />
+                                                <input className="flex-1 px-4 py-2.5 bg-slate-100 border-none rounded-xl text-xs outline-none focus:ring-2 focus:ring-emerald-500 font-bold text-slate-700" placeholder="新中区分..." value={newInput.medium || ''} onChange={e => setNewInput({ ...newInput, medium: e.target.value })} />
                                                 <button onClick={() => addMaster('medium')} className="p-3 bg-slate-800 text-white rounded-xl shadow-md active:scale-90"><i data-lucide="plus" size="16"></i></button>
                                             </div>
                                         </div>
                                         {/* 4. Charge Tags */}
                                         <div className="space-y-4">
-                                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest px-1">4. 担当課タグ (連動)</h3>
+                                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest px-1">4. 担当課タグ (部署連動)</h3>
                                             <div className="space-y-2 bg-slate-50/50 p-2 rounded-2xl border border-slate-100 min-h-[100px]">
                                                 {!selectedDeptForSettings && <div className="text-center py-10 text-[10px] text-slate-300 italic font-medium">部署を選択</div>}
                                                 {(config.chargeTags[selectedDeptForSettings] || []).map((ct, i) => (
@@ -768,7 +811,7 @@
                                                 ))}
                                             </div>
                                             <div className="flex gap-1 pt-2">
-                                                <input className="flex-1 px-4 py-2.5 bg-slate-100 border-none rounded-xl text-xs outline-none focus:ring-2 focus:ring-emerald-500 font-bold" placeholder="新タグ..." value={newInput.ctag || ''} onChange={e => setNewInput({ ...newInput, ctag: e.target.value })} />
+                                                <input className="flex-1 px-4 py-2.5 bg-slate-100 border-none rounded-xl text-xs outline-none focus:ring-2 focus:ring-emerald-500 font-bold text-slate-700" placeholder="新タグ..." value={newInput.ctag || ''} onChange={e => setNewInput({ ...newInput, ctag: e.target.value })} />
                                                 <button onClick={() => addMaster('ctag')} className="p-3 bg-emerald-600 text-white rounded-xl shadow-md active:scale-90"><i data-lucide="plus" size="16"></i></button>
                                             </div>
                                         </div>
