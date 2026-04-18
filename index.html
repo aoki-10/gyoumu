@@ -41,9 +41,17 @@
         .sortable-item:active { cursor: grabbing; }
         .touch-dragging { transform: scale(1.02); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); z-index: 50; }
         
-        .tag-dx { background-color: #dbeafe; color: #1e40af; }
-        .tag-office { background-color: #fef3c7; color: #92400e; }
-        .tag-common { background-color: #f3f4f6; color: #374151; }
+        .charge-tag { 
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 10px;
+            border-radius: 9999px;
+            font-size: 11px;
+            font-weight: 800;
+            background-color: #f0fdf4;
+            color: #166534;
+            border: 1px solid #bbf7d0;
+        }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-800">
@@ -68,7 +76,7 @@
             const app = initializeApp(firebaseConfig);
             const auth = getAuth(app);
             const db = getFirestore(app);
-            const appId = "gyoumukanri-v2-hierarchical"; 
+            const appId = "gyoumukanri-v7-final-hierarchy"; 
 
             window.firebaseApp = { 
                 auth, db, appId, collection, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot, query, getDoc, writeBatch,
@@ -87,15 +95,25 @@
 
         const MASTER_PASSCODE = "1870";
 
+        // フォームデータの初期構造
+        const initialFormData = {
+            dept: '', major: '', medium: '', small: '', chargeTag: '', 
+            owner: '', ownerSuccessor: '', 
+            verifier: '', verifierSuccessor: '',
+            doubleCheck: '－', handover: '×', memo: ''
+        };
+
         const App = () => {
             const [ready, setReady] = useState(false);
             const [user, setUser] = useState(null);
             const [tasks, setTasks] = useState([]);
             
+            // マスター構造
             const [config, setConfig] = useState({ 
-                depts: ['本部'], 
-                categories: { '本部': ['事務', 'DX', '経営企画'] },
-                items: { '事務': ['備品管理', '経費精算'], 'DX': ['システム導入', 'RPA作成'] }
+                depts: ['本部', '介護業務部'], 
+                majors: { '本部': ['人事関係', 'DX'], '介護業務部': ['相談', '介護'] },
+                mediums: { '人事関係': ['採用', '研修'], 'DX': ['システム管理'], '相談': ['新規受付'], '介護': ['ケア記録'] },
+                chargeTags: { '本部': ['第一課', '第二課'], '介護業務部': ['相談員チーム'] }
             });
             
             const [loading, setLoading] = useState(true);
@@ -103,34 +121,28 @@
             const [passcodeInput, setPasscodeInput] = useState('');
             const [errorMessage, setErrorMessage] = useState(null);
             
+            // UIステート
             const [isModalOpen, setIsModalOpen] = useState(false);
             const [isSettingsOpen, setIsSettingsOpen] = useState(false);
             const [selectedDeptForSettings, setSelectedDeptForSettings] = useState('');
-            const [selectedCatForSettings, setSelectedCatForSettings] = useState('');
+            const [selectedMajorForSettings, setSelectedMajorForSettings] = useState('');
             const [deleteConfirm, setDeleteConfirm] = useState(null);
             const [editingTask, setEditingTask] = useState(null);
             
-            const [deptFilter, setDeptFilter] = useState('すべて');
-            const [catFilter, setCatFilter] = useState('すべて');
-            const [ownerFilter, setOwnerFilter] = useState('全員');
+            // フィルタ設定
+            const [filters, setFilters] = useState({ dept: 'すべて', major: 'すべて', tag: 'すべて' });
             const [searchTerm, setSearchTerm] = useState('');
 
+            // 並び替え用ステート
             const [draggedIndex, setDraggedIndex] = useState(null);
             const [dragOverIndex, setDragOverIndex] = useState(null);
             const [dragType, setDragType] = useState(null); 
             const longPressTimer = useRef(null);
 
-            const [newDeptInput, setNewDeptInput] = useState('');
-            const [newCatInput, setNewCatInput] = useState('');
-            const [newItemInput, setNewItemInput] = useState('');
-            
-            const [editingIndex, setEditingIndex] = useState(null);
-            const [editingValue, setEditingValue] = useState('');
+            const [newInput, setNewInput] = useState({ dept: '', major: '', medium: '', ctag: '' });
+            const [editingMaster, setEditingMaster] = useState({ index: null, value: '', type: null });
 
-            const [formData, setFormData] = useState({
-                dept: '', category: '', item: '', minor: '', owner: '', verifier: '', 
-                doubleCheck: '－', handover: '×', successor: '', memo: ''
-            });
+            const [formData, setFormData] = useState(initialFormData);
 
             const handoverLabels = { '◎': '完了', '〇': 'たまに確認OK', '△': '引継中', '×': '未着手', '－': 'なし' };
 
@@ -161,22 +173,23 @@
                 const unsubConfig = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'app_config', 'settings'), (docSnap) => {
                     if (docSnap.exists()) {
                         const data = docSnap.data();
-                        const d = data.depts || ['本部'];
+                        const depts = Array.isArray(data.depts) ? data.depts : ['本部'];
                         setConfig({
-                            depts: d,
-                            categories: data.categories || {},
-                            items: data.items || {}
+                            depts: depts,
+                            majors: data.majors || {},
+                            mediums: data.mediums || {},
+                            chargeTags: data.chargeTags || {}
                         });
-                        setSelectedDeptForSettings(prev => (!prev || !d.includes(prev)) ? (d[0] || '') : prev);
+                        setSelectedDeptForSettings(prev => (!prev || !depts.includes(prev)) ? (depts[0] || '') : prev);
                     } else {
                         setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'app_config', 'settings'), config);
                     }
-                }, (error) => console.error("Config listener error:", error));
+                });
 
                 const unsubTasks = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'tasks'), (snapshot) => {
                     setTasks(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                     setLoading(false);
-                }, (error) => console.error("Tasks listener error:", error));
+                });
 
                 return () => { unsubConfig(); unsubTasks(); };
             }, [ready, user, isAuthorized]);
@@ -187,7 +200,7 @@
                     setIsAuthorized(true);
                     setErrorMessage(null);
                 } else {
-                    setErrorMessage("パスコードが正しくありません。");
+                    setErrorMessage("パスコードが違います。");
                 }
             };
 
@@ -207,16 +220,21 @@
                     const [item] = list.splice(draggedIndex, 1);
                     list.splice(dragOverIndex, 0, item);
                     newConfig.depts = list;
-                } else if (dragType === 'cat') {
-                    const list = [...(newConfig.categories[selectedDeptForSettings] || [])];
+                } else if (dragType === 'major') {
+                    const list = [...(newConfig.majors[selectedDeptForSettings] || [])];
                     const [item] = list.splice(draggedIndex, 1);
                     list.splice(dragOverIndex, 0, item);
-                    newConfig.categories[selectedDeptForSettings] = list;
-                } else if (dragType === 'item') {
-                    const list = [...(newConfig.items[selectedCatForSettings] || [])];
+                    newConfig.majors[selectedDeptForSettings] = list;
+                } else if (dragType === 'medium') {
+                    const list = [...(newConfig.mediums[selectedMajorForSettings] || [])];
                     const [item] = list.splice(draggedIndex, 1);
                     list.splice(dragOverIndex, 0, item);
-                    newConfig.items[selectedCatForSettings] = list;
+                    newConfig.mediums[selectedMajorForSettings] = list;
+                } else if (dragType === 'ctag') {
+                    const list = [...(newConfig.chargeTags[selectedDeptForSettings] || [])];
+                    const [item] = list.splice(draggedIndex, 1);
+                    list.splice(dragOverIndex, 0, item);
+                    newConfig.chargeTags[selectedDeptForSettings] = list;
                 }
                 handleSaveConfig(newConfig);
                 setDraggedIndex(null); setDragOverIndex(null); setDragType(null);
@@ -239,41 +257,56 @@
                 }
             };
 
-            const ownerList = useMemo(() => {
+            // 安全に大区分リストを生成（TypeError防止）
+            const majorListForFilter = useMemo(() => {
                 const set = new Set();
-                tasks.forEach(t => { if(t.owner) set.add(t.owner); });
-                return Array.from(set).sort();
-            }, [tasks]);
-
-            const categoryListForFilter = useMemo(() => {
-                if (deptFilter === 'すべて') {
-                    const set = new Set();
-                    Object.values(config.categories).forEach(list => list.forEach(c => set.add(c)));
-                    return Array.from(set);
+                if (filters.dept === 'すべて') {
+                    Object.values(config.majors || {}).forEach(list => {
+                        if (Array.isArray(list)) list.forEach(m => set.add(m));
+                    });
+                } else {
+                    const list = config.majors[filters.dept];
+                    if (Array.isArray(list)) list.forEach(m => set.add(m));
                 }
-                return config.categories[deptFilter] || [];
-            }, [deptFilter, config]);
+                return Array.from(set).sort();
+            }, [filters.dept, config]);
+
+            // 安全に担当課タグリストを生成（TypeError防止）
+            const tagListForFilter = useMemo(() => {
+                const set = new Set();
+                if (filters.dept === 'すべて') {
+                    Object.values(config.chargeTags || {}).forEach(list => {
+                        if (Array.isArray(list)) list.forEach(t => set.add(t));
+                    });
+                } else {
+                    const list = config.chargeTags[filters.dept];
+                    if (Array.isArray(list)) list.forEach(t => set.add(t));
+                }
+                return Array.from(set).sort();
+            }, [filters.dept, config]);
 
             const filteredTasks = useMemo(() => {
                 let f = tasks || [];
-                if (deptFilter !== 'すべて') f = f.filter(t => t.dept === deptFilter);
-                if (catFilter !== 'すべて') f = f.filter(t => t.category === catFilter);
-                if (ownerFilter !== '全員') f = f.filter(t => t.owner === ownerFilter);
+                if (filters.dept !== 'すべて') f = f.filter(t => t.dept === filters.dept);
+                if (filters.major !== 'すべて') f = f.filter(t => t.major === filters.major);
+                if (filters.tag !== 'すべて') f = f.filter(t => t.chargeTag === filters.tag);
+                
                 if (searchTerm) {
                     const s = searchTerm.toLowerCase();
-                    f = f.filter(t => ((t.dept||'') + (t.category||'') + (t.item||'') + (t.owner||'') + (t.memo||'') + (t.successor||'')).toLowerCase().includes(s));
+                    f = f.filter(t => ((t.dept||'') + (t.major||'') + (t.medium||'') + (t.small||'') + (t.chargeTag||'') + (t.owner||'') + (t.ownerSuccessor||'') + (t.verifier||'') + (t.verifierSuccessor||'') + (t.memo||'')).toLowerCase().includes(s));
                 }
+                
                 return [...f].sort((a,b) => {
                     const dIdxA = config.depts.indexOf(a.dept);
                     const dIdxB = config.depts.indexOf(b.dept);
                     if (dIdxA !== dIdxB) return dIdxA - dIdxB;
-                    const cList = config.categories[a.dept] || [];
-                    const cIdxA = cList.indexOf(a.category);
-                    const cIdxB = cList.indexOf(b.category);
-                    if (cIdxA !== cIdxB) return cIdxA - cIdxB;
-                    return (a.item || '').localeCompare(b.item || '', 'ja');
+                    const mList = config.majors[a.dept] || [];
+                    const mIdxA = Array.isArray(mList) ? mList.indexOf(a.major) : -1;
+                    const mIdxB = Array.isArray(mList) ? mList.indexOf(b.major) : -1;
+                    if (mIdxA !== mIdxB) return mIdxA - mIdxB;
+                    return (a.small || '').localeCompare(b.small || '', 'ja');
                 });
-            }, [tasks, deptFilter, catFilter, ownerFilter, searchTerm, config]);
+            }, [tasks, filters, searchTerm, config]);
 
             const handleSaveTask = async () => {
                 const { db, appId, collection, doc, addDoc, updateDoc } = window.firebaseApp;
@@ -283,7 +316,7 @@
                 setIsModalOpen(false);
             };
 
-            const confirmDelete = async () => {
+            const confirmDeleteTask = async () => {
                 if (!ready || !deleteConfirm) return;
                 const { db, appId, doc, deleteDoc } = window.firebaseApp;
                 try {
@@ -294,106 +327,105 @@
                 } catch (error) { console.error("Delete task failed:", error); }
             };
 
-            const addDept = () => {
-                const n = newDeptInput?.trim();
-                if(!n || config.depts.includes(n)) return;
-                handleSaveConfig({ ...config, depts: [...config.depts, n] });
-                setNewDeptInput(''); setSelectedDeptForSettings(n);
-            };
-            const addCat = () => {
-                const n = newCatInput?.trim();
-                if(!n || !selectedDeptForSettings) return;
-                const list = config.categories[selectedDeptForSettings] || [];
-                if(list.includes(n)) return;
-                handleSaveConfig({ ...config, categories: { ...config.categories, [selectedDeptForSettings]: [...list, n] } });
-                setNewCatInput(''); setSelectedCatForSettings(n);
-            };
-            const addItem = () => {
-                const n = newItemInput?.trim();
-                if(!n || !selectedCatForSettings) return;
-                const list = config.items[selectedCatForSettings] || [];
-                if(list.includes(n)) return;
-                handleSaveConfig({ ...config, items: { ...config.items, [selectedCatForSettings]: [...list, n] } });
-                setNewItemInput('');
+            const addMaster = (type) => {
+                const val = newInput[type]?.trim();
+                if (!val) return;
+                const newConfig = { ...config };
+                if (type === 'dept') {
+                    if (newConfig.depts.includes(val)) return;
+                    newConfig.depts = [...newConfig.depts, val];
+                    if (!newConfig.majors[val]) newConfig.majors[val] = [];
+                    if (!newConfig.chargeTags[val]) newConfig.chargeTags[val] = [];
+                } else if (type === 'major') {
+                    if (!selectedDeptForSettings) return;
+                    const list = newConfig.majors[selectedDeptForSettings] || [];
+                    if (list.includes(val)) return;
+                    newConfig.majors[selectedDeptForSettings] = [...list, val];
+                    if (!newConfig.mediums[val]) newConfig.mediums[val] = [];
+                } else if (type === 'medium') {
+                    if (!selectedMajorForSettings) return;
+                    const list = newConfig.mediums[selectedMajorForSettings] || [];
+                    if (list.includes(val)) return;
+                    newConfig.mediums[selectedMajorForSettings] = [...list, val];
+                } else if (type === 'ctag') {
+                    if (!selectedDeptForSettings) return;
+                    const list = newConfig.chargeTags[selectedDeptForSettings] || [];
+                    if (list.includes(val)) return;
+                    newConfig.chargeTags[selectedDeptForSettings] = [...list, val];
+                }
+                handleSaveConfig(newConfig);
+                setNewInput({ ...newInput, [type]: '' });
             };
 
-            const startEdit = (idx, val, type) => { setEditingIndex(idx); setEditingValue(val); setDragType(type); };
+            const deleteMaster = (type, index) => {
+                const newConfig = { ...config };
+                if (type === 'dept') {
+                    const old = newConfig.depts[index];
+                    newConfig.depts = newConfig.depts.filter((_, i) => i !== index);
+                    const associatedMajors = newConfig.majors[old] || [];
+                    if(Array.isArray(associatedMajors)) associatedMajors.forEach(m => delete newConfig.mediums[m]);
+                    delete newConfig.majors[old];
+                    delete newConfig.chargeTags[old];
+                } else if (type === 'major') {
+                    const old = newConfig.majors[selectedDeptForSettings][index];
+                    newConfig.majors[selectedDeptForSettings] = newConfig.majors[selectedDeptForSettings].filter((_, i) => i !== index);
+                    delete newConfig.mediums[old];
+                } else if (type === 'medium') {
+                    newConfig.mediums[selectedMajorForSettings] = newConfig.mediums[selectedMajorForSettings].filter((_, i) => i !== index);
+                } else if (type === 'ctag') {
+                    newConfig.chargeTags[selectedDeptForSettings] = newConfig.chargeTags[selectedDeptForSettings].filter((_, i) => i !== index);
+                }
+                handleSaveConfig(newConfig);
+            };
 
-            const saveEdit = async () => {
-                const n = editingValue?.trim();
-                if(!n || editingIndex === null) { setEditingIndex(null); return; }
+            const startMasterEdit = (idx, val, type) => setEditingMaster({ index: idx, value: val || '', type: type });
+            const saveMasterEdit = async () => {
+                const { index, value, type } = editingMaster;
+                if(!value.trim() || index === null) { setEditingMaster({ index: null, value: '', type: null }); return; }
+                const newConfig = { ...config };
                 const { db, appId, writeBatch, doc } = window.firebaseApp;
                 const batch = writeBatch(db);
-                
-                const newConfig = { ...config };
-                if (dragType === 'dept') {
-                    const old = config.depts[editingIndex];
-                    tasks.filter(t => t.dept === old).forEach(t => batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', t.id), { dept: n }));
-                    newConfig.depts[editingIndex] = n;
-                    newConfig.categories[n] = newConfig.categories[old] || []; delete newConfig.categories[old];
-                } else if (dragType === 'cat') {
-                    const old = config.categories[selectedDeptForSettings][editingIndex];
-                    tasks.filter(t => t.dept === selectedDeptForSettings && t.category === old).forEach(t => batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', t.id), { category: n }));
-                    newConfig.categories[selectedDeptForSettings][editingIndex] = n;
-                    newConfig.items[n] = newConfig.items[old] || []; delete newConfig.items[old];
-                } else if (dragType === 'item') {
-                    const old = config.items[selectedCatForSettings][editingIndex];
-                    tasks.filter(t => t.category === selectedCatForSettings && t.item === old).forEach(t => batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', t.id), { item: n }));
-                    newConfig.items[selectedCatForSettings][editingIndex] = n;
+
+                if (type === 'dept') {
+                    const old = newConfig.depts[index];
+                    tasks.filter(t => t.dept === old).forEach(t => batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', t.id), { dept: value }));
+                    newConfig.depts[index] = value;
+                    newConfig.majors[value] = newConfig.majors[old] || []; delete newConfig.majors[old];
+                    newConfig.chargeTags[value] = newConfig.chargeTags[old] || []; delete newConfig.chargeTags[old];
+                } else if (type === 'major') {
+                    const old = newConfig.majors[selectedDeptForSettings][index];
+                    tasks.filter(t => (t.dept === selectedDeptForSettings && t.major === old)).forEach(t => batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', t.id), { major: value }));
+                    newConfig.majors[selectedDeptForSettings][index] = value;
+                    newConfig.mediums[value] = newConfig.mediums[old] || []; delete newConfig.mediums[old];
+                } else if (type === 'medium') {
+                    const old = newConfig.mediums[selectedMajorForSettings][index];
+                    tasks.filter(t => (t.major === selectedMajorForSettings && t.medium === old)).forEach(t => batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', t.id), { medium: value }));
+                    newConfig.mediums[selectedMajorForSettings][index] = value;
+                } else if (type === 'ctag') {
+                    const old = newConfig.chargeTags[selectedDeptForSettings][index];
+                    tasks.filter(t => (t.dept === selectedDeptForSettings && t.chargeTag === old)).forEach(t => batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', t.id), { chargeTag: value }));
+                    newConfig.chargeTags[selectedDeptForSettings][index] = value;
                 }
-                
+
                 await batch.commit();
                 handleSaveConfig(newConfig);
-                setEditingIndex(null);
-            };
-
-            // 部署・カテゴリの物理削除ロジック（即時削除に修正）
-            const handleDeleteDept = (idx) => {
-                const deptName = config.depts[idx];
-                const newConfig = { ...config };
-                newConfig.depts = config.depts.filter((_, i) => i !== idx);
-                
-                const cats = config.categories[deptName] || [];
-                cats.forEach(c => delete newConfig.items[c]);
-                delete newConfig.categories[deptName];
-                
-                handleSaveConfig(newConfig);
-                if (selectedDeptForSettings === deptName) {
-                    setSelectedDeptForSettings(newConfig.depts[0] || '');
-                    setSelectedCatForSettings('');
-                }
-            };
-
-            const handleDeleteCat = (idx) => {
-                const catName = config.categories[selectedDeptForSettings][idx];
-                const newConfig = { ...config };
-                newConfig.categories[selectedDeptForSettings] = config.categories[selectedDeptForSettings].filter((_, i) => i !== idx);
-                delete newConfig.items[catName];
-                
-                handleSaveConfig(newConfig);
-                if (selectedCatForSettings === catName) setSelectedCatForSettings('');
-            };
-
-            const handleDeleteItem = (idx) => {
-                const newConfig = { ...config };
-                newConfig.items[selectedCatForSettings] = config.items[selectedCatForSettings].filter((_, i) => i !== idx);
-                handleSaveConfig(newConfig);
+                setEditingMaster({ index: null, value: '', type: null });
             };
 
             if (!ready) return null;
             if (!isAuthorized) {
                 return (
                     <div className="h-screen flex items-center justify-center p-6 bg-slate-900">
-                        <div className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl animate-fade-in text-center">
+                        <div className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl animate-fade-in text-center font-bold">
                             <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
                                 <i data-lucide="shield-check" size="32"></i>
                             </div>
-                            <h2 className="text-xl font-bold mb-2 text-slate-800 text-center">業務管理システム</h2>
-                            <p className="text-slate-500 text-sm mb-8 text-center">パスコードを入力してください</p>
-                            <form onSubmit={handlePasscodeAuth} className="space-y-4">
-                                <input type="password" required className="w-full px-4 py-4 bg-slate-100 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500 font-black text-center text-2xl tracking-widest" placeholder="••••" value={passcodeInput} onChange={e => setPasscodeInput(e.target.value)} />
-                                {errorMessage && <div className="p-3 bg-rose-50 text-rose-600 text-xs rounded-xl font-bold">{errorMessage}</div>}
-                                <button type="submit" className="w-full bg-blue-600 text-white py-4 rounded-xl font-black shadow-lg shadow-blue-100 active:scale-95 transition-all">認証する</button>
+                            <h2 className="text-xl font-bold mb-2 text-slate-800">業務管理システム</h2>
+                            <p className="text-slate-500 text-sm mb-8 font-medium text-center">パスコードを入力してください</p>
+                            <form onSubmit={handlePasscodeAuth} className="space-y-4 text-center">
+                                <input type="password" required className="w-full px-4 py-4 bg-slate-100 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500 font-black text-center text-2xl tracking-widest text-slate-700" placeholder="••••" value={passcodeInput} onChange={e => setPasscodeInput(e.target.value)} />
+                                {errorMessage && <div className="p-3 bg-rose-50 text-rose-600 text-xs rounded-xl font-bold text-center">{errorMessage}</div>}
+                                <button type="submit" className="w-full bg-blue-600 text-white py-4 rounded-xl font-black shadow-lg active:scale-95 transition-all">ログイン</button>
                             </form>
                         </div>
                     </div>
@@ -406,95 +438,95 @@
                 <div className="max-w-7xl mx-auto p-4 md:p-8 pb-32">
                     {/* Header */}
                     <div className="flex justify-between items-center mb-8">
-                        <h1 className="text-xl md:text-2xl font-black text-slate-900 flex items-center gap-2">
-                            <span className="bg-blue-600 p-1.5 rounded-lg text-white"><i data-lucide="layers" size="18"></i></span>
-                            業務分担管理 <span className="text-xs text-slate-300 font-normal">v2.4</span>
+                        <h1 className="text-xl md:text-2xl font-black text-slate-900 flex items-center gap-2 text-nowrap">
+                            <span className="bg-blue-600 p-1.5 rounded-lg text-white"><i data-lucide="clipboard-list" size="18"></i></span>
+                            業務分担管理 <span className="text-xs text-slate-300 font-normal">v4.6</span>
                         </h1>
-                        <div className="flex gap-2 text-slate-600">
+                        <div className="flex gap-2">
                             <button onClick={() => setIsSettingsOpen(true)} className="p-2.5 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm"><i data-lucide="settings" size="20"></i></button>
                         </div>
                     </div>
 
-                    {/* Filters */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8 bg-white p-6 rounded-3xl border border-slate-200 shadow-sm font-bold">
-                        <div className="space-y-2">
-                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1 flex items-center gap-1"><i data-lucide="building" size="10"></i> 部署で抽出</label>
-                            <div className="flex gap-2 overflow-x-auto no-scrollbar">
-                                <button onClick={() => { setDeptFilter('すべて'); setCatFilter('すべて'); }} className={`px-4 py-1.5 rounded-full text-[10px] font-bold whitespace-nowrap transition-all ${deptFilter === 'すべて' ? 'bg-slate-800 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>すべて</button>
-                                {config.depts.map(r => (
-                                    <button key={r} onClick={() => { setDeptFilter(r); setCatFilter('すべて'); }} className={`px-4 py-1.5 rounded-full text-[10px] font-bold whitespace-nowrap transition-all ${deptFilter === r ? 'bg-blue-600 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>{r}</button>
-                                ))}
+                    {/* Filter Section (UIをタグ抽出に修正) */}
+                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-6 mb-8 font-bold text-slate-700 text-sm">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">1. 部署で抽出</label>
+                                <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                                    <button onClick={() => setFilters({...filters, dept: 'すべて', major: 'すべて', tag: 'すべて'})} className={`px-4 py-1.5 rounded-full text-[10px] whitespace-nowrap transition-all ${filters.dept === 'すべて' ? 'bg-slate-800 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>すべて</button>
+                                    {(config.depts || []).map(d => (
+                                        <button key={d} onClick={() => setFilters({...filters, dept: d, major: 'すべて', tag: 'すべて'})} className={`px-4 py-1.5 rounded-full text-[10px] whitespace-nowrap transition-all ${filters.dept === d ? 'bg-blue-600 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>{d}</button>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">2. 大区分で抽出</label>
+                                <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                                    <button onClick={() => setFilters({...filters, major: 'すべて'})} className={`px-4 py-1.5 rounded-full text-[10px] whitespace-nowrap transition-all ${filters.major === 'すべて' ? 'bg-slate-800 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>すべて</button>
+                                    {majorListForFilter.map(m => (
+                                        <button key={m} onClick={() => setFilters({...filters, major: m})} className={`px-4 py-1.5 rounded-full text-[10px] whitespace-nowrap transition-all ${filters.major === m ? 'bg-indigo-500 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>{m}</button>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">3. 担当課タグで抽出 (部署連動)</label>
+                                <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                                    <button onClick={() => setFilters({...filters, tag: 'すべて'})} className={`px-4 py-1.5 rounded-full text-[10px] whitespace-nowrap transition-all ${filters.tag === 'すべて' ? 'bg-emerald-600 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>すべて</button>
+                                    {tagListForFilter.map(ct => (
+                                        <button key={ct} onClick={() => setFilters({...filters, tag: ct})} className={`px-4 py-1.5 rounded-full text-[10px] whitespace-nowrap transition-all ${filters.tag === ct ? 'bg-emerald-600 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>{ct}</button>
+                                    ))}
+                                </div>
                             </div>
                         </div>
-                        <div className="space-y-2">
-                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1 flex items-center gap-1"><i data-lucide="tag" size="10"></i> カテゴリで抽出</label>
-                            <div className="flex gap-2 overflow-x-auto no-scrollbar">
-                                <button onClick={() => setCatFilter('すべて')} className={`px-4 py-1.5 rounded-full text-[10px] font-bold whitespace-nowrap transition-all ${catFilter === 'すべて' ? 'bg-slate-800 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>すべて</button>
-                                {categoryListForFilter.map(c => (
-                                    <button key={c} onClick={() => setCatFilter(c)} className={`px-4 py-1.5 rounded-full text-[10px] font-bold whitespace-nowrap transition-all ${catFilter === c ? 'bg-indigo-500 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>{c}</button>
-                                ))}
-                            </div>
-                        </div>
-                        <div className="space-y-2">
-                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1 flex items-center gap-1"><i data-lucide="user" size="10"></i> 担当者で抽出</label>
-                            <div className="flex gap-2 overflow-x-auto no-scrollbar">
-                                <button onClick={() => setOwnerFilter('全員')} className={`px-4 py-1.5 rounded-full text-[10px] font-bold whitespace-nowrap transition-all ${ownerFilter === '全員' ? 'bg-emerald-600 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>全員</button>
-                                {ownerList.map(o => (
-                                    <button key={o} onClick={() => setOwnerFilter(o)} className={`px-4 py-1.5 rounded-full text-[10px] font-bold whitespace-nowrap transition-all ${ownerFilter === o ? 'bg-emerald-600 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>{o}</button>
-                                ))}
-                            </div>
+                        <div className="relative">
+                            <i data-lucide="search" className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size="18"></i>
+                            <input type="text" placeholder="キーワード検索（担当者名・詳細など）..." className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border border-transparent rounded-2xl outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm transition-all" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
                         </div>
                     </div>
 
-                    {/* Task List Table */}
                     <div className="bg-white rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-200 overflow-hidden mb-8">
-                        <div className="p-4 md:p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-                            <div className="flex items-center gap-3">
-                                <span className="text-sm font-bold text-slate-900">表示中の業務</span>
-                                <span className="bg-white px-2 py-1 rounded-lg text-xs font-black text-blue-600 shadow-sm border border-slate-200">{filteredTasks.length} 件</span>
-                            </div>
-                            <div className="relative w-full max-w-xs hidden md:block">
-                                <i data-lucide="search" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" size="14"></i>
-                                <input type="text" placeholder="キーワード検索..." className="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-blue-500 transition-all shadow-sm font-medium" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
-                            </div>
-                        </div>
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-left min-w-[900px]">
-                                <thead className="bg-slate-50/50 border-b border-slate-100">
-                                    <tr className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                                        <th className="px-6 py-4">部署 / カテゴリ</th>
-                                        <th className="px-6 py-4">業務名称</th>
-                                        <th className="px-6 py-4">担当 / 確認 / 引継者</th>
+                        <div className="overflow-x-auto font-bold">
+                            <table className="w-full text-left min-w-[1100px]">
+                                <thead className="bg-slate-50/80 border-b border-slate-100 font-black text-slate-400 uppercase tracking-widest text-[10px]">
+                                    <tr>
+                                        <th className="px-6 py-4">部署 / 担当タグ</th>
+                                        <th className="px-6 py-4">業務内容 (大 ＞ 中 ＞ 小区分)</th>
+                                        <th className="px-6 py-4">担当者 / 引継</th>
+                                        <th className="px-6 py-4">責任者 / 引継</th>
                                         <th className="px-6 py-4 text-center">W</th>
-                                        <th className="px-6 py-4 text-center">引継ぎ</th>
+                                        <th className="px-6 py-4 text-center">状況</th>
                                         <th className="px-6 py-4 text-right">操作</th>
                                     </tr>
                                 </thead>
-                                <tbody className="divide-y divide-slate-100 font-medium">
+                                <tbody className="divide-y divide-slate-100 font-medium text-slate-700 text-sm">
                                     {filteredTasks.map(t => (
-                                        <tr key={t.id} className="hover:bg-slate-50/30 group transition-colors text-slate-700">
+                                        <tr key={t.id} className="hover:bg-slate-50/50 group transition-colors">
                                             <td className="px-6 py-4 whitespace-nowrap">
-                                                <div className="text-[10px] font-black text-slate-300 uppercase tracking-tighter mb-1">{t.dept}</div>
-                                                <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${t.category === 'DX' ? 'tag-dx' : t.category === '事務' ? 'tag-office' : 'tag-common'}`}>{t.category}</span>
+                                                <div className="text-[10px] font-black text-slate-300 uppercase mb-1">{t.dept}</div>
+                                                <span className="charge-tag shadow-sm">{t.chargeTag}</span>
                                             </td>
                                             <td className="px-6 py-4">
-                                                <div className="text-sm font-bold text-slate-800">{t.item}</div>
-                                                {(t.minor || t.memo) && (
-                                                    <div className="text-[10px] text-slate-400 font-normal truncate max-w-[200px] mt-0.5 italic">
-                                                        {t.memo ? `(備考: ${t.memo})` : t.minor}
-                                                    </div>
-                                                )}
+                                                <div className="flex items-center gap-2 mb-1">
+                                                    <span className="text-[9px] font-bold text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded uppercase">{t.major}</span>
+                                                    <span className="text-[10px] font-bold text-slate-400">{t.medium}</span>
+                                                </div>
+                                                <div className="text-sm font-bold text-slate-800 leading-snug">{t.small}</div>
+                                                {t.memo && <div className="text-[10px] text-slate-400 font-normal truncate max-w-[200px] mt-1 italic">備考: {t.memo}</div>}
                                             </td>
-                                            <td className="px-6 py-4 text-xs whitespace-nowrap">
+                                            <td className="px-6 py-4 whitespace-nowrap">
                                                 <div className="text-slate-900 font-bold">{t.owner || '-'}</div>
-                                                <div className="text-slate-400 font-normal mt-0.5">検: {t.verifier || '-'} | 継: {t.successor || '-'}</div>
+                                                {t.ownerSuccessor && <div className="text-blue-500 text-[10px] font-bold mt-0.5">→ {t.ownerSuccessor}</div>}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                <div className="text-slate-500 font-bold">{t.verifier || '-'}</div>
+                                                {t.verifierSuccessor && <div className="text-indigo-400 text-[10px] font-bold mt-0.5">→ {t.verifierSuccessor}</div>}
                                             </td>
                                             <td className="px-6 py-4 text-center font-black text-slate-400">{t.doubleCheck}</td>
                                             <td className="px-6 py-4 text-center text-xl font-bold">
                                                 <span className={t.handover === '◎' ? 'text-green-600' : t.handover === '×' ? 'text-rose-400' : t.handover === '－' ? 'text-slate-300' : 'text-blue-500'}>{t.handover}</span>
                                             </td>
                                             <td className="px-6 py-4 text-right opacity-0 group-hover:opacity-100 transition-opacity">
-                                                <button onClick={() => { setEditingTask(t); setFormData({...t}); setIsModalOpen(true); }} className="p-2 text-slate-300 hover:text-blue-600 bg-slate-100/0 hover:bg-slate-100 rounded-lg"><i data-lucide="edit-3" size="16"></i></button>
+                                                <button onClick={() => { setEditingTask(t); setFormData({ ...initialFormData, ...t }); setIsModalOpen(true); }} className="p-2 text-slate-300 hover:text-blue-600 bg-slate-100/0 hover:bg-slate-100 rounded-lg transition-all"><i data-lucide="edit-3" size="16"></i></button>
                                             </td>
                                         </tr>
                                     ))}
@@ -503,13 +535,13 @@
                         </div>
                     </div>
 
-                    {/* Floating Add Button */}
                     <button onClick={() => {
                         const d = config.depts[0] || '';
-                        const c = config.categories[d]?.[0] || '';
-                        const i = config.items[c]?.[0] || '';
+                        const m = (config.majors[d] || [])[0] || '';
+                        const med = (config.mediums[m] || [])[0] || '';
+                        const ct = (config.chargeTags[d] || [])[0] || '';
                         setEditingTask(null); 
-                        setFormData({ dept: d, category: c, item: i, minor: '', owner: '', verifier: '', doubleCheck: '－', handover: '×', successor: '', memo: '' }); 
+                        setFormData({ ...initialFormData, dept: d, major: m, medium: med, chargeTag: ct }); 
                         setIsModalOpen(true);
                     }} className="fixed bottom-8 right-8 w-16 h-16 bg-blue-600 text-white rounded-3xl shadow-2xl flex items-center justify-center z-40 hover:scale-110 active:scale-95 transition-all">
                         <i data-lucide="plus" size="28"></i>
@@ -518,72 +550,90 @@
                     {/* Entry Modal */}
                     {isModalOpen && (
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end md:items-center justify-center p-0 md:p-4 text-slate-900">
-                            <div className="bg-white w-full max-w-2xl rounded-t-3xl md:rounded-3xl flex flex-col max-h-[92vh] overflow-hidden animate-fade-in shadow-2xl">
+                            <div className="bg-white w-full max-w-2xl rounded-t-3xl md:rounded-3xl flex flex-col max-h-[92vh] overflow-hidden animate-fade-in shadow-2xl text-sm">
                                 <div className="p-6 border-b flex justify-between items-center bg-white sticky top-0">
-                                    <h2 className="font-black flex items-center gap-2 text-slate-700">
-                                        {editingTask ? '業務内容を編集' : '新しい業務を登録'}
+                                    <h2 className="font-black flex items-center gap-2 text-slate-700 uppercase">
+                                        {editingTask ? '業務内容を編集' : '業務を登録'}
                                     </h2>
                                     <button onClick={() => setIsModalOpen(false)} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"><i data-lucide="x" size="20"></i></button>
                                 </div>
-                                <div className="p-6 space-y-6 overflow-y-auto flex-1 bg-slate-50/50">
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">所属部署</label>
-                                            <select className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl font-bold shadow-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all" value={formData.dept} onChange={e => {
-                                                const d = e.target.value;
-                                                const c = config.categories[d]?.[0] || '';
-                                                setFormData({...formData, dept: d, category: c, item: config.items[c]?.[0] || ''});
-                                            }}>
-                                                {config.depts.map(d => <option key={d} value={d}>{d}</option>)}
-                                            </select>
-                                        </div>
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">カテゴリ (タグ)</label>
-                                            <select className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl font-bold shadow-sm outline-none focus:ring-2 focus:ring-blue-500" value={formData.category} onChange={e => {
-                                                const c = e.target.value;
-                                                setFormData({...formData, category: c, item: config.items[c]?.[0] || ''});
-                                            }}>
-                                                {(config.categories[formData.dept] || []).map(c => <option key={c} value={c}>{c}</option>)}
-                                            </select>
-                                        </div>
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">業務名称 (中区分)</label>
-                                        <select className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl font-bold shadow-sm outline-none focus:ring-2 focus:ring-blue-500" value={formData.item} onChange={e => setFormData({...formData, item: e.target.value})}>
-                                            {(config.items[formData.category] || []).map(i => <option key={i} value={i}>{i}</option>)}
-                                            <option value="">-- 手入力 / その他 --</option>
+                                <div className="p-6 space-y-6 overflow-y-auto flex-1 bg-slate-50/50 font-bold text-slate-700">
+                                    <div className="space-y-1">
+                                        <label className="text-[10px] uppercase tracking-widest px-1">所属部署</label>
+                                        <select className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-blue-500 font-bold text-slate-700" value={formData.dept || ''} onChange={e => {
+                                            const d = e.target.value;
+                                            const m = (config.majors[d] || [])[0] || '';
+                                            const ct = (config.chargeTags[d] || [])[0] || '';
+                                            setFormData({...formData, dept: d, major: m, medium: (config.mediums[m] || [])[0] || '', chargeTag: ct});
+                                        }}>
+                                            {config.depts.map(d => <option key={d} value={d}>{d}</option>)}
                                         </select>
-                                        {(!config.items[formData.category]?.includes(formData.item) && formData.item !== "") && (
-                                            <input className="w-full px-4 py-3 mt-2 bg-white border border-slate-200 rounded-2xl font-bold shadow-sm outline-none animate-fade-in transition-all" value={formData.item} onChange={e => setFormData({...formData, item: e.target.value})} placeholder="業務名を手入力..." />
-                                        )}
                                     </div>
-                                    
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm font-bold">
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">現在の担当者</label>
-                                            <input className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl outline-none" placeholder="名前" value={formData.owner} onChange={e => setFormData({...formData, owner: e.target.value})} />
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div className="space-y-1">
+                                            <label className="text-[10px] uppercase tracking-widest px-1">業務大区分 (部署連動)</label>
+                                            <select className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-blue-500 font-bold text-slate-700" value={formData.major || ''} onChange={e => {
+                                                const m = e.target.value;
+                                                setFormData({...formData, major: m, medium: (config.mediums[m] || [])[0] || ''});
+                                            }}>
+                                                {(config.majors[formData.dept] || []).map(m => <option key={m} value={m}>{m}</option>)}
+                                            </select>
                                         </div>
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">確認責任者</label>
-                                            <input className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl outline-none" placeholder="名前" value={formData.verifier} onChange={e => setFormData({...formData, verifier: e.target.value})} />
+                                        <div className="space-y-1">
+                                            <label className="text-[10px] uppercase tracking-widest px-1 text-emerald-600">担当課タグ (部署連動)</label>
+                                            <select className="w-full px-4 py-3 bg-emerald-50 border border-emerald-100 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-emerald-500 font-bold text-slate-700" value={formData.chargeTag || ''} onChange={e => setFormData({...formData, chargeTag: e.target.value})}>
+                                                {(config.chargeTags[formData.dept] || []).map(ct => <option key={ct} value={ct}>{ct}</option>)}
+                                            </select>
                                         </div>
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1 text-blue-600">引継ぎ者(後任)</label>
-                                            <input className="w-full px-4 py-3 bg-blue-50 border border-blue-200 rounded-2xl outline-none" placeholder="後任者名" value={formData.successor} onChange={e => setFormData({...formData, successor: e.target.value})} />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-[10px] uppercase tracking-widest px-1">業務中区分 (大区分連動)</label>
+                                        <select className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-blue-500 font-bold text-slate-700" value={formData.medium || ''} onChange={e => setFormData({...formData, medium: e.target.value})}>
+                                            {(config.mediums[formData.major] || []).map(med => <option key={med} value={med}>{med}</option>)}
+                                        </select>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-[10px] uppercase tracking-widest px-1">小区分 (タスク詳細)</label>
+                                        <input required className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-blue-500 font-bold" value={formData.small || ''} onChange={e => setFormData({...formData, small: e.target.value})} placeholder="具体的な業務内容を入力" />
+                                    </div>
+
+                                    {/* 担当者・引継者登録 */}
+                                    <div className="space-y-4 pt-2">
+                                        <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-inner space-y-4">
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div className="space-y-1">
+                                                    <label className="text-[10px] px-1 text-slate-400">現在の担当者</label>
+                                                    <input className="w-full px-4 py-3 bg-slate-50 border-none rounded-xl outline-none font-bold" value={formData.owner || ''} onChange={e => setFormData({...formData, owner: e.target.value})} placeholder="名前" />
+                                                </div>
+                                                <div className="space-y-1">
+                                                    <label className="text-[10px] px-1 text-blue-600">担当引継者 (後任)</label>
+                                                    <input className="w-full px-4 py-3 bg-blue-50 border-none rounded-xl outline-none font-bold" value={formData.ownerSuccessor || ''} onChange={e => setFormData({...formData, ownerSuccessor: e.target.value})} placeholder="名前" />
+                                                </div>
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div className="space-y-1">
+                                                    <label className="text-[10px] px-1 text-slate-400">現在の責任者</label>
+                                                    <input className="w-full px-4 py-3 bg-slate-50 border-none rounded-xl outline-none font-bold" value={formData.verifier || ''} onChange={e => setFormData({...formData, verifier: e.target.value})} placeholder="名前" />
+                                                </div>
+                                                <div className="space-y-1">
+                                                    <label className="text-[10px] px-1 text-indigo-500">責任引継者 (後任)</label>
+                                                    <input className="w-full px-4 py-3 bg-indigo-50 border-none rounded-xl outline-none font-bold" value={formData.verifierSuccessor || ''} onChange={e => setFormData({...formData, verifierSuccessor: e.target.value})} placeholder="名前" />
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
 
-                                    <div className="grid grid-cols-2 gap-4 pt-4 border-t border-slate-100">
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Wチェック</label>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="space-y-1">
+                                            <label className="text-[10px] px-1">Wチェック</label>
                                             <div className="flex gap-2 bg-slate-200/50 p-1 rounded-2xl">
                                                 {['〇', '×', '－'].map(v => (
                                                     <button key={v} onClick={() => setFormData({...formData, doubleCheck: v})} className={`flex-1 py-3 rounded-xl font-black text-sm transition-all ${formData.doubleCheck === v ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'}`}>{v}</button>
                                                 ))}
                                             </div>
                                         </div>
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">引継ぎ状況</label>
+                                        <div className="space-y-1">
+                                            <label className="text-[10px] px-1">状況</label>
                                             <div className="flex gap-1.5 bg-slate-200/50 p-1 rounded-2xl overflow-x-auto no-scrollbar">
                                                 {Object.keys(handoverLabels).map(v => (
                                                     <button key={v} onClick={() => setFormData({...formData, handover: v})} className={`min-w-[44px] flex-1 py-3 rounded-xl font-black text-lg transition-all ${formData.handover === v ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'}`}>{v}</button>
@@ -591,116 +641,135 @@
                                             </div>
                                         </div>
                                     </div>
-
-                                    <div className="space-y-2">
-                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1 text-emerald-600">備考欄</label>
-                                        <textarea className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl h-24 outline-none resize-none focus:ring-2 focus:ring-emerald-500 font-medium" value={formData.memo} onChange={e => setFormData({...formData, memo: e.target.value})} placeholder="補足、手順URLなど" />
-                                    </div>
-
-                                    {editingTask && (
-                                        <div className="pt-4">
-                                            <button onClick={() => setDeleteConfirm(editingTask.id)} className="w-full py-4 text-rose-500 font-bold bg-rose-50 rounded-2xl hover:bg-rose-100 transition-colors border border-rose-100 flex items-center justify-center gap-2"><i data-lucide="trash-2" size="18"></i> このデータを削除する</button>
-                                        </div>
-                                    )}
+                                    <textarea className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl h-24 outline-none resize-none focus:ring-2 focus:ring-emerald-500 font-medium text-xs" value={formData.memo || ''} onChange={e => setFormData({...formData, memo: e.target.value})} placeholder="備考・補足事項を記入してください" />
+                                    {editingTask && <button onClick={() => setDeleteConfirm(editingTask.id)} className="w-full py-4 text-rose-500 font-bold bg-rose-50 rounded-2xl border border-rose-100 flex items-center justify-center gap-2 active:bg-rose-200 transition-all shadow-sm"><i data-lucide="trash-2" size="18"></i> 削除する</button>}
                                 </div>
                                 <div className="p-6 border-t bg-white safe-area-bottom">
-                                    <button onClick={handleSaveTask} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black shadow-lg shadow-blue-100 hover:bg-blue-700 active:scale-95 transition-all">保存して閉じる</button>
+                                    <button onClick={handleSaveTask} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black shadow-lg active:scale-95 transition-all">保存して閉じる</button>
                                 </div>
                             </div>
                         </div>
                     )}
 
-                    {/* Settings Modal (並び替え・削除機能) */}
+                    {/* Settings Modal */}
                     {isSettingsOpen && (
-                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4 text-slate-900">
-                            <div className="bg-white w-full max-w-6xl max-h-[90vh] rounded-3xl overflow-hidden flex flex-col shadow-2xl animate-fade-in" onTouchMove={moveTouchSort} onTouchEnd={handleSortEnd}>
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4 text-slate-900 font-bold">
+                            <div className="bg-white w-full max-w-[95vw] max-h-[95vh] rounded-3xl overflow-hidden flex flex-col shadow-2xl animate-fade-in" onTouchMove={moveTouchSort} onTouchEnd={handleSortEnd}>
                                 <div className="p-6 border-b flex justify-between items-center bg-white sticky top-0">
-                                    <h2 className="font-black flex items-center gap-2"><i data-lucide="settings" size="20"></i> マスター構造管理</h2>
-                                    <button onClick={() => setIsSettingsOpen(false)} className="p-2 bg-slate-100 rounded-full"><i data-lucide="x" size="20"></i></button>
+                                    <h2 className="font-black flex items-center gap-2 text-slate-800"><i data-lucide="settings" size="20"></i> マスター構造管理</h2>
+                                    <button onClick={() => setIsSettingsOpen(false)} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"><i data-lucide="x" size="20"></i></button>
                                 </div>
-                                <div className="flex-1 overflow-y-auto p-4 md:p-8">
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                        {/* 1. 部署/課 */}
+                                <div className="flex-1 overflow-y-auto p-4 md:p-8 text-sm">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 text-slate-700">
+                                        {/* 1. Depts */}
                                         <div className="space-y-4">
-                                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center justify-between">1. 部署/課</h3>
-                                            <div className="space-y-2 min-h-[100px] bg-slate-50/50 p-2 rounded-2xl border border-slate-100 font-bold text-slate-700">
-                                                {config.depts.map((d, i) => (
-                                                    <div key={d} data-index={i} data-type="dept" draggable={editingIndex === null} onDragStart={() => {setDraggedIndex(i); setDragType('dept');}} onDragOver={(e) => {e.preventDefault(); if(dragType==='dept') setDragOverIndex(i);}} onDragEnd={handleSortEnd} onTouchStart={() => startTouchSort(i, 'dept')}
-                                                        className={`flex items-center gap-2 p-1.5 rounded-xl transition-all sortable-item ${selectedDeptForSettings === d ? 'bg-blue-600 text-white shadow-lg ring-4 ring-blue-100' : 'bg-white text-slate-600 border border-slate-200'} ${draggedIndex === i && dragType === 'dept' ? 'dragging touch-dragging' : ''} ${dragOverIndex === i && dragType === 'dept' ? 'drag-over' : ''}`}>
-                                                        {editingIndex === i && dragType === 'dept' ? (
-                                                            <div className="flex-1 flex gap-1 animate-fade-in" onPointerDown={e => e.stopPropagation()}>
-                                                                <input autoFocus className="flex-1 px-2 py-1 text-sm bg-white text-slate-900 rounded-lg outline-none" value={editingValue} onChange={e => setEditingValue(e.target.value)} />
-                                                                <button onClick={saveEdit} className="p-1 text-green-400"><i data-lucide="check" size="16"></i></button>
+                                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest px-1">1. 部署</h3>
+                                            <div className="space-y-2 bg-slate-50/50 p-2 rounded-2xl border border-slate-100 min-h-[100px]">
+                                                {(config.depts || []).map((d, i) => (
+                                                    <div key={d} data-index={i} data-type="dept" draggable={editingMaster.index === null} onDragStart={() => {setDraggedIndex(i); setDragType('dept');}} onDragOver={(e) => {e.preventDefault(); if(dragType==='dept') setDragOverIndex(i);}} onDragEnd={handleSortEnd} onTouchStart={() => startTouchSort(i, 'dept')}
+                                                        className={`flex items-center gap-2 p-1.5 rounded-xl transition-all sortable-item ${selectedDeptForSettings === d ? 'bg-blue-600 text-white shadow-lg ring-4 ring-blue-100' : 'bg-white border border-slate-200'} ${draggedIndex === i && dragType === 'dept' ? 'dragging touch-dragging' : ''} ${dragOverIndex === i && dragType === 'dept' ? 'drag-over' : ''}`}>
+                                                        {editingMaster.index === i && editingMaster.type === 'dept' ? (
+                                                            <div className="flex-1 flex gap-1" onPointerDown={e => e.stopPropagation()}>
+                                                                <input autoFocus className="flex-1 px-2 py-1 text-sm bg-white rounded-lg outline-none border border-blue-500 text-slate-900" value={editingMaster.value || ''} onChange={e => setEditingMaster({...editingMaster, value: e.target.value})} />
+                                                                <button onClick={saveMasterEdit} className="p-1 text-green-500"><i data-lucide="check" size="16"></i></button>
                                                             </div>
                                                         ) : (
                                                             <>
-                                                                <button onClick={() => {setSelectedDeptForSettings(d); setSelectedCatForSettings('');}} className="flex-1 text-left px-2 text-sm truncate">{d}</button>
-                                                                <button onClick={() => startEdit(i, d, 'dept')} className={`p-1 ${selectedDeptForSettings === d ? 'text-white/60' : 'text-slate-300'}`}><i data-lucide="edit-2" size="12"></i></button>
-                                                                <button onClick={(e) => { e.stopPropagation(); handleDeleteDept(i); }} className={`p-1 ${selectedDeptForSettings === d ? 'text-white/60' : 'text-slate-300'} hover:text-rose-500`}><i data-lucide="trash-2" size="14"></i></button>
+                                                                <button onClick={() => { setSelectedDeptForSettings(d); setSelectedMajorForSettings(''); }} className="flex-1 text-left px-2 truncate font-bold">{d}</button>
+                                                                <button onClick={() => startMasterEdit(i, d, 'dept')} className={`p-1 ${selectedDeptForSettings === d ? 'text-white/60' : 'text-slate-300'}`}><i data-lucide="edit-2" size="12"></i></button>
+                                                                <button onClick={() => deleteMaster('dept', i)} className={`p-1 ${selectedDeptForSettings === d ? 'text-white/60' : 'text-slate-300'} hover:text-rose-500`}><i data-lucide="trash-2" size="12"></i></button>
                                                             </>
                                                         )}
                                                     </div>
                                                 ))}
                                             </div>
                                             <div className="flex gap-1 pt-2">
-                                                <input className="flex-1 px-4 py-2.5 bg-slate-100 border-none rounded-xl text-xs outline-none focus:ring-2 focus:ring-blue-500" placeholder="新規部署..." value={newDeptInput} onChange={e => setNewDeptInput(e.target.value)} />
-                                                <button onClick={addDept} className="p-3 bg-slate-800 text-white rounded-xl shadow-md"><i data-lucide="plus" size="16"></i></button>
+                                                <input className="flex-1 px-4 py-2.5 bg-slate-100 border-none rounded-xl text-xs outline-none focus:ring-2 focus:ring-blue-500 font-bold" placeholder="新部署..." value={newInput.dept || ''} onChange={e => setNewInput({ ...newInput, dept: e.target.value })} />
+                                                <button onClick={() => addMaster('dept')} className="p-3 bg-slate-800 text-white rounded-xl shadow-md active:scale-90"><i data-lucide="plus" size="16"></i></button>
                                             </div>
                                         </div>
-                                        {/* 2. カテゴリ(大区分) */}
+                                        {/* 2. Majors */}
                                         <div className="space-y-4">
-                                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center justify-between">2. カテゴリ(大区分)</h3>
-                                            <div className="space-y-2 min-h-[100px] bg-slate-50/50 p-2 rounded-2xl border border-slate-100 font-bold text-slate-700">
-                                                {!selectedDeptForSettings && <div className="text-center py-10 text-[10px] text-slate-300 italic font-medium">部署を選択してください</div>}
-                                                {(config.categories[selectedDeptForSettings] || []).map((c, i) => (
-                                                    <div key={c} data-index={i} data-type="cat" draggable={editingIndex === null} onDragStart={() => {setDraggedIndex(i); setDragType('cat');}} onDragOver={(e) => {e.preventDefault(); if(dragType==='cat') setDragOverIndex(i);}} onDragEnd={handleSortEnd} onTouchStart={() => startTouchSort(i, 'cat')}
-                                                        className={`flex items-center gap-2 p-1.5 rounded-xl transition-all sortable-item ${selectedCatForSettings === c ? 'bg-indigo-500 text-white shadow-lg ring-4 ring-indigo-50' : 'bg-white text-slate-600 border border-slate-200'} ${draggedIndex === i && dragType === 'cat' ? 'dragging touch-dragging' : ''} ${dragOverIndex === i && dragType === 'cat' ? 'drag-over' : ''}`}>
-                                                        {editingIndex === i && dragType === 'cat' ? (
-                                                            <div className="flex-1 flex gap-1 animate-fade-in" onPointerDown={e => e.stopPropagation()}>
-                                                                <input autoFocus className="flex-1 px-2 py-1 text-sm bg-white text-slate-900 rounded-lg outline-none" value={editingValue} onChange={e => setEditingValue(e.target.value)} />
-                                                                <button onClick={saveEdit} className="p-1 text-green-400"><i data-lucide="check" size="16"></i></button>
+                                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest px-1">2. 大区分 (連動)</h3>
+                                            <div className="space-y-2 bg-slate-50/50 p-2 rounded-2xl border border-slate-100 min-h-[100px]">
+                                                {!selectedDeptForSettings && <div className="text-center py-10 text-[10px] text-slate-300 italic font-medium">部署を選択</div>}
+                                                {(config.majors[selectedDeptForSettings] || []).map((m, i) => (
+                                                    <div key={m} data-index={i} data-type="major" draggable={editingMaster.index === null} onDragStart={() => {setDraggedIndex(i); setDragType('major');}} onDragOver={(e) => {e.preventDefault(); if(dragType==='major') setDragOverIndex(i);}} onDragEnd={handleSortEnd} onTouchStart={() => startTouchSort(i, 'major')}
+                                                        className={`flex items-center gap-2 p-1.5 rounded-xl transition-all sortable-item ${selectedMajorForSettings === m ? 'bg-indigo-500 text-white shadow-lg ring-4 ring-indigo-100' : 'bg-white border border-slate-200'} ${draggedIndex === i && dragType === 'major' ? 'dragging touch-dragging' : ''} ${dragOverIndex === i && dragType === 'major' ? 'drag-over' : ''}`}>
+                                                        {editingMaster.index === i && editingMaster.type === 'major' ? (
+                                                            <div className="flex-1 flex gap-1" onPointerDown={e => e.stopPropagation()}>
+                                                                <input autoFocus className="flex-1 px-2 py-1 text-sm bg-white rounded-lg outline-none border border-indigo-500 text-slate-900" value={editingMaster.value || ''} onChange={e => setEditingMaster({...editingMaster, value: e.target.value})} />
+                                                                <button onClick={saveMasterEdit} className="p-1 text-green-400"><i data-lucide="check" size="16"></i></button>
                                                             </div>
                                                         ) : (
                                                             <>
-                                                                <button onClick={() => setSelectedCatForSettings(c)} className="flex-1 text-left px-2 text-sm truncate">{c}</button>
-                                                                <button onClick={() => startEdit(i, c, 'cat')} className={`p-1 ${selectedCatForSettings === c ? 'text-white/60' : 'text-slate-300'}`}><i data-lucide="edit-2" size="12"></i></button>
-                                                                <button onClick={(e) => { e.stopPropagation(); handleDeleteCat(i); }} className={`p-1 ${selectedCatForSettings === c ? 'text-white/60' : 'text-slate-300'} hover:text-rose-500`}><i data-lucide="trash-2" size="14"></i></button>
+                                                                <button onClick={() => setSelectedMajorForSettings(m)} className="flex-1 text-left px-2 truncate font-bold">{m}</button>
+                                                                <button onClick={() => startMasterEdit(i, m, 'major')} className={`p-1 ${selectedMajorForSettings === m ? 'text-white/60' : 'text-slate-300'}`}><i data-lucide="edit-2" size="12"></i></button>
+                                                                <button onClick={() => deleteMaster('major', i)} className={`p-1 ${selectedMajorForSettings === m ? 'text-white/60' : 'text-slate-300'} hover:text-rose-500`}><i data-lucide="trash-2" size="12"></i></button>
                                                             </>
                                                         )}
                                                     </div>
                                                 ))}
                                             </div>
                                             <div className="flex gap-1 pt-2">
-                                                <input className="flex-1 px-4 py-2.5 bg-slate-100 border-none rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500" placeholder="新規カテゴリ..." value={newCatInput} onChange={e => setNewCatInput(e.target.value)} />
-                                                <button onClick={addCat} className="p-3 bg-slate-800 text-white rounded-xl shadow-md"><i data-lucide="plus" size="16"></i></button>
+                                                <input className="flex-1 px-4 py-2.5 bg-slate-100 border-none rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500 font-bold" placeholder="新大区分..." value={newInput.major || ''} onChange={e => setNewInput({ ...newInput, major: e.target.value })} />
+                                                <button onClick={() => addMaster('major')} className="p-3 bg-slate-800 text-white rounded-xl shadow-md active:scale-90"><i data-lucide="plus" size="16"></i></button>
                                             </div>
                                         </div>
-                                        {/* 3. 業務項目(中区分) */}
+                                        {/* 3. Mediums */}
                                         <div className="space-y-4">
-                                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center justify-between">3. 業務項目(中区分)</h3>
-                                            <div className="space-y-2 min-h-[100px] bg-slate-50/50 p-2 rounded-2xl border border-slate-100 font-bold text-slate-700">
-                                                {!selectedCatForSettings && <div className="text-center py-10 text-[10px] text-slate-300 italic font-medium">カテゴリを選択してください</div>}
-                                                {(config.items[selectedCatForSettings] || []).map((v, i) => (
-                                                    <div key={v} data-index={i} data-type="item" draggable={editingIndex === null} onDragStart={() => {setDraggedIndex(i); setDragType('item');}} onDragOver={(e) => {e.preventDefault(); if(dragType==='item') setDragOverIndex(i);}} onDragEnd={handleSortEnd} onTouchStart={() => startTouchSort(i, 'item')}
-                                                        className={`flex items-center gap-2 p-2 rounded-xl transition-all sortable-item bg-white text-slate-600 border border-slate-200 ${draggedIndex === i && dragType === 'item' ? 'dragging touch-dragging' : ''} ${dragOverIndex === i && dragType === 'item' ? 'drag-over' : ''}`}>
-                                                        {editingIndex === i && dragType === 'item' ? (
-                                                            <div className="flex-1 flex gap-1 animate-fade-in" onPointerDown={e => e.stopPropagation()}>
-                                                                <input autoFocus className="flex-1 px-2 py-1 text-sm bg-white text-slate-900 rounded-lg outline-none" value={editingValue} onChange={e => setEditingValue(e.target.value)} />
-                                                                <button onClick={saveEdit} className="p-1 text-green-400"><i data-lucide="check" size="16"></i></button>
+                                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest px-1">3. 中区分 (連動)</h3>
+                                            <div className="space-y-2 bg-slate-50/50 p-2 rounded-2xl border border-slate-100 min-h-[100px]">
+                                                {!selectedMajorForSettings && <div className="text-center py-10 text-[10px] text-slate-300 italic font-medium">大区分を選択</div>}
+                                                {(config.mediums[selectedMajorForSettings] || []).map((v, i) => (
+                                                    <div key={v} data-index={i} data-type="medium" draggable={editingMaster.index === null} onDragStart={() => {setDraggedIndex(i); setDragType('medium');}} onDragOver={(e) => {e.preventDefault(); if(dragType==='medium') setDragOverIndex(i);}} onDragEnd={handleSortEnd} onTouchStart={() => startTouchSort(i, 'medium')}
+                                                        className={`flex items-center gap-2 p-1.5 rounded-xl transition-all sortable-item bg-white border border-slate-200 ${draggedIndex === i && dragType === 'medium' ? 'dragging touch-dragging' : ''} ${dragOverIndex === i && dragType === 'medium' ? 'drag-over' : ''}`}>
+                                                        {editingMaster.index === i && editingMaster.type === 'medium' ? (
+                                                            <div className="flex-1 flex gap-1" onPointerDown={e => e.stopPropagation()}>
+                                                                <input autoFocus className="flex-1 px-2 py-1 text-sm bg-white rounded-lg outline-none border border-blue-500 text-slate-900" value={editingMaster.value || ''} onChange={e => setEditingMaster({...editingMaster, value: e.target.value})} />
+                                                                <button onClick={saveMasterEdit} className="p-1 text-green-500"><i data-lucide="check" size="16"></i></button>
                                                             </div>
                                                         ) : (
                                                             <>
-                                                                <span className="flex-1 text-left px-2 text-sm truncate">{v}</span>
-                                                                <button onClick={() => startEdit(i, v, 'item')} className="p-1 text-slate-300"><i data-lucide="edit-2" size="12"></i></button>
-                                                                <button onClick={() => handleDeleteItem(i)} className="p-1 text-slate-300 hover:text-rose-500 transition-colors"><i data-lucide="trash-2" size="14"></i></button>
+                                                                <span className="flex-1 text-left px-2 truncate text-slate-600 font-bold">{v}</span>
+                                                                <button onClick={() => startMasterEdit(i, v, 'medium')} className="p-1 text-slate-300 hover:text-blue-500 transition-all"><i data-lucide="edit-2" size="12"></i></button>
+                                                                <button onClick={() => deleteMaster('medium', i)} className="p-1 text-slate-300 hover:text-rose-500 transition-all"><i data-lucide="trash-2" size="12"></i></button>
                                                             </>
                                                         )}
                                                     </div>
                                                 ))}
                                             </div>
                                             <div className="flex gap-1 pt-2">
-                                                <input className="flex-1 px-4 py-2.5 bg-slate-100 border-none rounded-xl text-xs outline-none focus:ring-2 focus:ring-emerald-500" placeholder="新規業務項目..." value={newItemInput} onChange={e => setNewItemInput(e.target.value)} />
-                                                <button onClick={addItem} className="p-3 bg-slate-800 text-white rounded-xl shadow-md"><i data-lucide="plus" size="16"></i></button>
+                                                <input className="flex-1 px-4 py-2.5 bg-slate-100 border-none rounded-xl text-xs outline-none focus:ring-2 focus:ring-emerald-500 font-bold" placeholder="新中区分..." value={newInput.medium || ''} onChange={e => setNewInput({ ...newInput, medium: e.target.value })} />
+                                                <button onClick={() => addMaster('medium')} className="p-3 bg-slate-800 text-white rounded-xl shadow-md active:scale-90"><i data-lucide="plus" size="16"></i></button>
+                                            </div>
+                                        </div>
+                                        {/* 4. Charge Tags */}
+                                        <div className="space-y-4">
+                                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest px-1">4. 担当課タグ (連動)</h3>
+                                            <div className="space-y-2 bg-slate-50/50 p-2 rounded-2xl border border-slate-100 min-h-[100px]">
+                                                {!selectedDeptForSettings && <div className="text-center py-10 text-[10px] text-slate-300 italic font-medium">部署を選択</div>}
+                                                {(config.chargeTags[selectedDeptForSettings] || []).map((ct, i) => (
+                                                    <div key={ct} data-index={i} data-type="ctag" draggable={editingMaster.index === null} onDragStart={() => {setDraggedIndex(i); setDragType('ctag');}} onDragOver={(e) => {e.preventDefault(); if(dragType==='ctag') setDragOverIndex(i);}} onDragEnd={handleSortEnd} onTouchStart={() => startTouchSort(i, 'ctag')}
+                                                        className={`flex items-center gap-2 p-1.5 rounded-xl transition-all sortable-item bg-emerald-50 border border-emerald-100 ${draggedIndex === i && dragType === 'ctag' ? 'dragging touch-dragging' : ''} ${dragOverIndex === i && dragType === 'ctag' ? 'drag-over' : ''}`}>
+                                                        {editingMaster.index === i && editingMaster.type === 'ctag' ? (
+                                                            <div className="flex-1 flex gap-1" onPointerDown={e => e.stopPropagation()}>
+                                                                <input autoFocus className="flex-1 px-2 py-1 text-sm bg-white rounded-lg outline-none border border-emerald-500 text-slate-900" value={editingMaster.value || ''} onChange={e => setEditingMaster({...editingMaster, value: e.target.value})} />
+                                                                <button onClick={saveMasterEdit} className="p-1 text-green-600"><i data-lucide="check" size="16"></i></button>
+                                                            </div>
+                                                        ) : (
+                                                            <>
+                                                                <span className="flex-1 text-left px-2 truncate text-emerald-700 font-bold">{ct}</span>
+                                                                <button onClick={() => startMasterEdit(i, ct, 'ctag')} className="p-1 text-emerald-300 hover:text-emerald-600 transition-all"><i data-lucide="edit-2" size="12"></i></button>
+                                                                <button onClick={() => deleteMaster('ctag', i)} className="p-1 text-emerald-300 hover:text-rose-500 transition-all"><i data-lucide="trash-2" size="12"></i></button>
+                                                            </>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                            <div className="flex gap-1 pt-2">
+                                                <input className="flex-1 px-4 py-2.5 bg-slate-100 border-none rounded-xl text-xs outline-none focus:ring-2 focus:ring-emerald-500 font-bold" placeholder="新タグ..." value={newInput.ctag || ''} onChange={e => setNewInput({ ...newInput, ctag: e.target.value })} />
+                                                <button onClick={() => addMaster('ctag')} className="p-3 bg-emerald-600 text-white rounded-xl shadow-md active:scale-90"><i data-lucide="plus" size="16"></i></button>
                                             </div>
                                         </div>
                                     </div>
@@ -709,13 +778,12 @@
                         </div>
                     )}
 
-                    {/* Delete Confirm (Tasks) */}
                     {deleteConfirm && (
                         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-                            <div className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl animate-fade-in text-center">
-                                <h3 className="font-bold mb-6 text-slate-800 text-lg">データを完全に削除しますか？</h3>
+                            <div className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl animate-fade-in text-center font-bold text-slate-800">
+                                <h3 className="font-black mb-6 text-lg">業務データを完全に削除しますか？</h3>
                                 <div className="flex gap-3">
-                                    <button onClick={confirmDelete} className="flex-1 py-4 bg-rose-600 text-white font-black rounded-2xl active:scale-95 transition-all shadow-lg shadow-rose-200">削除する</button>
+                                    <button onClick={confirmDeleteTask} className="flex-1 py-4 bg-rose-600 text-white rounded-2xl active:scale-95 transition-all shadow-lg font-bold text-nowrap">削除する</button>
                                     <button onClick={() => setDeleteConfirm(null)} className="flex-1 py-4 font-bold text-slate-400 hover:text-slate-600 transition-all">キャンセル</button>
                                 </div>
                             </div>
