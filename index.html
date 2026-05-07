@@ -15,6 +15,9 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- エクセル出力用ライブラリ -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Noto+Sans+JP:wght@400;700&display=swap');
         body { 
@@ -106,7 +109,6 @@
 
         const MASTER_PASSCODE = "1870";
 
-        // フォームデータの初期構造（undefinedエラー防止用）
         const initialFormData = {
             dept: '', major: '', medium: '', small: '', chargeTag: '', 
             owner: '', ownerSuccessor: '', 
@@ -119,7 +121,6 @@
             const [user, setUser] = useState(null);
             const [tasks, setTasks] = useState([]);
             
-            // マスター構造
             const [config, setConfig] = useState({ 
                 depts: ['本部', '介護業務部'], 
                 majors: { '本部': ['人事関係', 'DX'], '介護業務部': ['相談', '介護'] },
@@ -132,7 +133,6 @@
             const [passcodeInput, setPasscodeInput] = useState('');
             const [errorMessage, setErrorMessage] = useState(null);
             
-            // UIステート
             const [isModalOpen, setIsModalOpen] = useState(false);
             const [isSettingsOpen, setIsSettingsOpen] = useState(false);
             const [isFilterOpen, setIsFilterOpen] = useState(false);
@@ -141,11 +141,9 @@
             const [deleteConfirm, setDeleteConfirm] = useState(null);
             const [editingTask, setEditingTask] = useState(null);
             
-            // 検索・絞り込み
             const [filters, setFilters] = useState({ dept: 'すべて', major: 'すべて', tag: 'すべて' });
             const [searchTerm, setSearchTerm] = useState('');
 
-            // 並び替え用
             const [draggedIndex, setDraggedIndex] = useState(null);
             const [dragOverIndex, setDragOverIndex] = useState(null);
             const [dragType, setDragType] = useState(null); 
@@ -220,6 +218,33 @@
                 if (!ready || !user) return;
                 const { db, appId, doc, setDoc } = window.firebaseApp;
                 await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'app_config', 'settings'), newConfig);
+            };
+
+            // エクセル出力機能
+            const handleExportExcel = () => {
+                // 出力するデータの整形
+                const exportData = filteredTasks.map(t => ({
+                    '部署': t.dept,
+                    '担当課タグ': t.chargeTag,
+                    '大区分': t.major,
+                    '中区分': t.medium,
+                    '小区分(業務名)': t.small,
+                    '担当者': t.owner || '-',
+                    '担当引継者': t.ownerSuccessor || '-',
+                    '責任者': t.verifier || '-',
+                    '責任引継者': t.verifierSuccessor || '-',
+                    'Wチェック': t.doubleCheck,
+                    '状況': handoverLabels[t.handover] || t.handover,
+                    '備考': t.memo || ''
+                }));
+
+                const worksheet = XLSX.utils.json_to_sheet(exportData);
+                const workbook = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(workbook, worksheet, "業務一覧");
+
+                // ファイル名の生成（日付入り）
+                const date = new Date().toISOString().split('T')[0];
+                XLSX.writeFile(workbook, `業務分担表_${date}.xlsx`);
             };
 
             const handleSortEnd = () => {
@@ -450,14 +475,19 @@
                     <div className="flex justify-between items-center mb-8">
                         <h1 className="text-xl md:text-2xl font-black text-slate-900 flex items-center gap-2 text-nowrap">
                             <span className="bg-blue-600 p-1.5 rounded-lg text-white"><i data-lucide="clipboard-list" size="18"></i></span>
-                            業務分担管理 <span className="text-xs text-slate-300 font-normal">v5.0</span>
+                            業務分担管理 <span className="text-xs text-slate-300 font-normal">v5.1</span>
                         </h1>
                         <div className="flex gap-2">
+                            {/* エクセル出力ボタン */}
+                            <button onClick={handleExportExcel} className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 transition-all shadow-sm font-bold text-sm">
+                                <i data-lucide="file-text" size="18"></i>
+                                <span className="hidden sm:inline">エクセル出力</span>
+                            </button>
                             <button onClick={() => setIsSettingsOpen(true)} className="p-2.5 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm"><i data-lucide="settings" size="20"></i></button>
                         </div>
                     </div>
 
-                    {/* Search & Detail Filter Bar (NEW UI) */}
+                    {/* Search & Detail Filter Bar */}
                     <div className="bg-white p-4 md:p-5 rounded-3xl border border-slate-200 shadow-sm mb-8">
                         <div className="flex items-center gap-3">
                             <div className="relative flex-1 group">
